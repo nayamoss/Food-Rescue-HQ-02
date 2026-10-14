@@ -306,12 +306,14 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       const saved = ui.phoneSaved[v.id];
       return `<div class="rc-vol"><div class="rc-volhead">${avatarHtml({ name: v.name, vol: v })}<div class="rc-grow"><b>${esc(v.name)}</b>
           <p class="rc-line">${o ? `${fmt(o.portions)} ${esc(o.item)} to ${esc(p?.name || 'a partner')}` : 'No ask yet'}</p></div><span class="rc-stt ${o ? esc(o.status) : ''}">${chipFor(o, v)}</span></div>
-        ${demo ? `<div class="rc-actions">${demo}</div>` : ''}
-        <div class="rc-phone"><label class="rc-fld rc-grow"><span>Phone for ${esc(v.name)} (demo)</span><input type="tel" autocomplete="off" data-f="phone" data-id="${esc(v.id)}" value="${esc(ui.phone[v.id] || '')}" placeholder="+15551234567"></label>
+        <div class="rc-phone"><label class="rc-fld rc-grow"><span>1. Phone number for ${esc(v.name)}</span><input type="tel" autocomplete="off" data-f="phone" data-id="${esc(v.id)}" value="${esc(ui.phone[v.id] || '')}" placeholder="+15551234567"></label>
         <button type="button" class="rc-btn rc-sm" data-act="savePhone" data-id="${esc(v.id)}"${dis()}>Save phone</button></div>
-        ${saved ? '<p class="rc-hint">Saved. It is kept private.</p>' : ''}</div>`;
+        ${saved ? '<p class="rc-hint">Saved. It is kept private.</p>' : ''}
+        ${o && ['offered', 'accepted'].includes(o.status) ? `<div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="call" data-id="${esc(o.id)}" data-vid="${esc(v.id)}"${dis()}>2. Call ${esc(v.name.split(' ')[0])} now</button></div>` : ''}
+        ${(ui.callNote || {})[v.id] ? `<p class="rc-hint">${esc(ui.callNote[v.id])}</p>` : ''}
+        ${demo ? `<div class="rc-actions">${demo}</div>` : ''}</div>`;
     }).join('');
-    return hqRow(bubble('I am reaching out to volunteers. You can answer for them below while we demo.') + `<div class="rc-cardm">${rows}</div>`);
+    return hqRow(bubble('Reaching out to volunteers. Add a phone number, then tap Call now. They hear the offer and press 1 to accept, or 2 to decline.') + `<div class="rc-cardm">${rows}</div>`);
   }
 
   function summaryData() {
@@ -737,6 +739,14 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
         if (!/^\+?[0-9 ()-]{7,20}$/.test(phone)) { showError('Enter a phone number with the country code, for example +15551234567.'); break; }
         const r = await act('POST', `/api/volunteers/${encodeURIComponent(id)}/phone`, { phone: phone.replace(/[^\d+]/g, '') });
         if (r.ok) { ui.phone[id] = ''; ui.phoneSaved[id] = true; saveUi(); render(); }
+        break;
+      }
+      case 'call': {
+        const vid = button.dataset.vid;
+        ui.callNote = ui.callNote || {};
+        const r = await act('POST', `/api/offers/${encodeURIComponent(id)}/call`, {});
+        ui.callNote[vid] = r.ok ? (r.data?.message || 'Calling now.') : (r.message || 'The call did not go through.');
+        render();
         break;
       }
       case 'retry': showError(''); readState(); break;

@@ -84,7 +84,7 @@ export async function callForOffers(core, offerIds) {
       if (!d) { results.push({ offerId, skipped: true, reason: "unknown offer" }); continue; }
       const v = volunteers.find((x) => x.id === d.volunteerId) || volunteers.find((x) => x.name === d.volunteerName);
       const phone = d.phone || v?.phone;
-      if (!phone || v?.optedIn === false) { results.push({ offerId, skipped: true, reason: "no phone or not opted in" }); continue; }
+      if (!phone || /^\+1202555/.test(phone) || v?.optedIn === false) { results.push({ offerId, skipped: true, reason: "no phone or not opted in" }); continue; }
       const body = new URLSearchParams({
         To: phone,
         From: from,

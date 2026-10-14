@@ -52,7 +52,7 @@ export async function textForOffers(core, offerIds) {
       const o = offers.find((x) => x.id === offerId);
       if (!d || !o) { results.push({ offerId, skipped: true, reason: "unknown offer" }); continue; }
       const v = volunteers.find((x) => x.id === o.volunteerId);
-      if (!v?.phone || v.optedIn === false) { results.push({ offerId, skipped: true, reason: "no phone or not opted in" }); continue; }
+      if (!v?.phone || /^\+1202555/.test(v.phone) || v.optedIn === false) { results.push({ offerId, skipped: true, reason: "no phone or not opted in" }); continue; }
       const r = await fetch(url, {
         method: "POST",
         headers: { Authorization: auth, "Content-Type": "application/x-www-form-urlencoded" },

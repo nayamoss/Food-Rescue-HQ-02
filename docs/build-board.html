@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Food Rescue HQ: Build board</title>
+<style>
+  :root { --bg:#F7F6F3; --col:#EFEDE8; --card:#FFFFFF; --text:#1C1C1A; --muted:#787774; --sage:#40745C; --coral:#F58E63; --sky:#A3BDD2; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",sans-serif; background:var(--bg); color:var(--text); padding:24px; }
+  h1 { font-size:22px; font-weight:600; }
+  .meta { font-size:14px; color:var(--muted); margin:4px 0 20px; }
+  .board { display:grid; grid-template-columns:repeat(4, minmax(220px, 1fr)); gap:16px; overflow-x:auto; align-items:start; }
+  .col { background:var(--col); border-radius:12px; padding:12px; }
+  .col h2 { font-size:13px; font-weight:600; display:flex; justify-content:space-between; margin:2px 4px 10px; }
+  .col h2 span { color:var(--muted); font-weight:500; }
+  .card { background:var(--card); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
+  .todo h2{color:#1C1C1A} .card b { display:block; font-size:14px; font-weight:600; margin-bottom:3px; }
+  .card p { font-size:13px; color:var(--muted); line-height:1.4; }
+  .tag { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); margin-top:6px; }
+  .dot { width:7px; height:7px; border-radius:50%; display:inline-block; }
+  .done .dot { background:var(--sage); } .doing .dot { background:var(--coral); } .next .dot { background:var(--sky); } .you .dot { background:var(--coral); } .cut .dot { background:#BDBAB4; }
+  @media (max-width: 900px) { .board { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<h1>Food Rescue HQ: Build board</h1>
+<div class="meta">Updated 2026-10-14. Code branch: build/voice-and-cleanup in Food-Rescue-HQ-02.</div>
+
+<div class="board"><div class="col todo"><h2>To do <span>6</span></h2><div class="card"><b>Real phone test</b><p>Send offers, phone rings, press 1, board updates.</p></div><div class="card"><b>Agent brain in the chat</b><p>Questions come from the agent, not the script.</p></div><div class="card"><b>Duplicate chips on mobile</b><p>Quick replies show twice.</p></div><div class="card"><b>Push to GitHub</b><p>Build branch to the repo.</p></div><div class="card"><b>Texting webhook</b><p>Point incoming messages to /sms/inbound.</p></div><div class="card"><b>Rehearse the demo</b><p>Three runs, one with demo buttons only.</p></div></div><div class="col doing"><h2>In progress <span>1</span></h2><div class="card"><b>Live address</b><p>foodhq.namosdemos.site through Cloudflare.</p></div></div><div class="col blocked"><h2>Blocked <span>3</span></h2><div class="card"><b>Twilio keys</b><p>Account SID and Auth Token in the local .env (Naya).</p></div><div class="card"><b>Cloudflare authorize</b><p>Select namosdemos.site and click Authorize (Naya).</p></div><div class="card"><b>OpenAI key</b><p>Needed for photo AI and live agent replies.</p></div></div><div class="col done"><h2>Done <span>9</span></h2><div class="card"><b>Plan and docs</b><p>One-pager, journey, photo PRD, contract.</p></div><div class="card"><b>Twilio checked</b><p>Paid, $25, number with voice and SMS.</p></div><div class="card"><b>Core backend</b><p>Event to summary, tested.</p></div><div class="card"><b>Voice calls</b><p>Press 1 accepts, press 2 declines.</p></div><div class="card"><b>Texts and replies</b><p>YES or NO by SMS.</p></div><div class="card"><b>Photo estimate</b><p>OpenAI Vision with manual fallback.</p></div><div class="card"><b>Agent brain</b><p>Questions and why-this-place, scripted fallback.</p></div><div class="card"><b>Rescue chat screen</b><p>Pocket HQ look, mobile first, volunteer page.</p></div><div class="card"><b>Merged and running</b><p>All self-tests pass, public link.</p></div></div></div>
+</body>
+</html>

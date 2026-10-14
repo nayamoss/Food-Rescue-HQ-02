@@ -90,6 +90,23 @@ app.post("/api/offers/send", route(200, (req) => core.sendOffers(req.body), plac
 app.post("/api/offers/:id/respond", route(200, (req) => core.respondToOffer(req.params.id, req.body?.action)));
 app.post("/api/offers/:id/pickup", route(200, (req) => core.pickupOffer(req.params.id)));
 app.post("/api/offers/:id/dropoff", route(200, (req) => core.dropoffOffer(req.params.id)));
+// Call the volunteer for one offer right now (used by the "Call now" button).
+app.post("/api/offers/:id/call", async (req, res) => {
+  const offer = core.getOffer(req.params.id);
+  if (!offer) return res.status(404).json({ error: "That offer no longer exists." });
+  if (typeof voice?.callForOffers !== "function") return res.status(503).json({ error: "Calling is not available." });
+  try {
+    const out = await voice.callForOffers(voiceCore, [offer.id]);
+    if (out?.skipped) return res.status(409).json({ error: "Calls are not set up yet." });
+    const r = out?.results?.[0];
+    if (r?.ok) return res.json({ ok: true, message: "Calling now. Answer and press 1 to accept." });
+    if (r?.skipped) return res.status(409).json({ error: "Add a real phone number for this volunteer first." });
+    return res.status(502).json({ error: "The call did not go through. Check the number and try again." });
+  } catch (error) {
+    log.error({ err: error?.name }, "Call now failed");
+    return res.status(502).json({ error: "The call did not go through. Try again." });
+  }
+});
 app.post("/api/volunteers/:id/phone", route(200, (req) => core.setVolunteerPhone(req.params.id, req.body?.phone)));
 app.get("/v/:id", (_req, res) => {
   const page = path.join(root, "public", "v.html");
