@@ -148,7 +148,7 @@ registerConnect(app, {
   coordinatorPhone: () => core.coordinatorPhone(),
   addFeed: (text) => core.postUpdate(text),
 });
-app.patch("/api/places/:id", route(200, (req) => core.patchPlace(req.params.id, req.body)));
+app.patch("/api/places/:id", route(200, (req) => core.patchPlace(req.params.id, req.body), placeCalls));
 app.delete("/api/places/:id", route(200, (req) => core.deletePlace(req.params.id)));
 app.get("/v/:id", (_req, res) => {
   const page = path.join(root, "public", "v.html");

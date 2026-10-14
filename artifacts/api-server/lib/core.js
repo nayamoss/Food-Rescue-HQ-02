@@ -880,6 +880,10 @@ export function patchPlace(id, body) {
     places: state.places.map((x) => (x.id === id ? { ...x, ...fields } : x)),
     feed: withFeed(`Updated place ${fields.name && fields.name !== p.name ? `${p.name} (now ${fields.name})` : p.name}.`),
   });
+  // A phone added while this place is being asked: dial it now instead of leaving the lot stuck.
+  if (fields.phone && !p.phone) {
+    pendingCalls.push(...state.offers.filter((o) => o.placeId === id && o.status === "calling").map((o) => o.id));
+  }
   return snapshot();
 }
 
