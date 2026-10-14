@@ -17,12 +17,17 @@ core.onChange((snap) => {
 // Optional voice module (owned separately). If it is missing or a call fails, the app keeps working.
 let voice = null;
 try { voice = await import("./lib/voice.js"); } catch { voice = null; }
+// The voice module talks to the core only through this small adapter.
+const voiceCore = {
+  getState: () => core.snapshot(),
+  describeOffer: (id) => core.describeOffer(id),
+  respondToOffer: (id, action) => core.respondToOffer(id, action),
+  addFeed: (text) => { try { core.postUpdate(text); } catch { /* feed is best effort */ } },
+};
 async function placeCalls() {
   const ids = core.takePendingCalls();
-  if (!voice || typeof voice.callVolunteer !== "function") return;
-  for (const offerId of ids) {
-    try { await voice.callVolunteer(offerId); } catch (error) { log.error(error, "Voice call failed"); }
-  }
+  if (!ids.length || typeof voice?.callForOffers !== "function") return;
+  try { await voice.callForOffers(voiceCore, ids); } catch (error) { log.error(error, "Voice call failed"); }
 }
 
 const app = express();
@@ -35,6 +40,7 @@ app.use((req, _res, next) => {
 });
 app.disable("x-powered-by");
 registerEstimate(app); // before the global json parser: has its own larger body limit
+if (voice?.registerVoice) voice.registerVoice(app, voiceCore); // Twilio voice webhooks (own urlencoded parser)
 app.use(express.json({ limit: "64kb" }));
 app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
 app.get("/api/healthz", (_req, res) => res.json({ status: "ok" }));
