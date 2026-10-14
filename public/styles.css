@@ -153,6 +153,8 @@ a { color: inherit; }
 .rc-lot + .rc-lot { margin-top: 10px; }
 .rc-lothead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .rc-lothead b { font-size: 17px; }
+.rc-lothead .rc-link.rc-sm { margin-left: auto; min-height: 32px; font-size: 13px; padding: 4px 2px; }
+.rc-cancelrescue { margin-top: 24px; flex-direction: column; align-items: flex-start; }
 .rc-track { list-style: none; margin: 0; padding: 0 0 0 2px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .rc-track li { min-width: 0; }
 .rc-lot, .rc-cardm > * { min-width: 0; }
@@ -212,7 +214,7 @@ a { color: inherit; }
 .rc-recnote { flex: none; }
 .rc-agentbar { background: var(--bg); }
 
-/* ---- pages: events, nonprofits, volunteers ---- */
+/* ---- pages: events, partners, volunteers ---- */
 .rc-pagehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
 .rc-pagehead-end { justify-content: flex-end; }
 .rc-pagehead-end:empty { display: none; }

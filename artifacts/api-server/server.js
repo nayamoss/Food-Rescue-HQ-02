@@ -150,6 +150,8 @@ registerConnect(app, {
 });
 app.patch("/api/places/:id", route(200, (req) => core.patchPlace(req.params.id, req.body), placeCalls));
 app.delete("/api/places/:id", route(200, (req) => core.deletePlace(req.params.id)));
+app.post("/api/lots/:id/cancel", route(200, (req) => core.cancelLot(req.params.id)));
+app.post("/api/rescue/cancel", route(200, () => core.cancelRescue()));
 app.get("/v/:id", (_req, res) => {
   const page = path.join(root, "public", "v.html");
   if (existsSync(page)) return res.sendFile(page);
