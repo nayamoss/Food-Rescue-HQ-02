@@ -1,0 +1,1 @@
+- [Authentication sequencing](authentication-sequencing.md) — Login is the last implementation step, not a prerequisite for rescue features.
