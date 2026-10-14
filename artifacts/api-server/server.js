@@ -144,6 +144,8 @@ app.post("/api/places", route(201, (req) => core.addPlace(req.body)));
 app.post("/api/settings", route(200, (req) => core.setSettings(req.body)));
 registerConnect(app, {
   getVolunteer: (id) => core.getVolunteer(id),
+  getPlace: (id) => core.snapshot().places.find((p) => p.id === id) || null,
+  placePhone: (id) => core.placePhone(id),
   volunteerPhone: (id) => core.volunteerPhone(id),
   coordinatorPhone: () => core.coordinatorPhone(),
   addFeed: (text) => core.postUpdate(text),

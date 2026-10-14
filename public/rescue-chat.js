@@ -674,9 +674,9 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       const confirming = confirmRm === `p:${p.id}`;
       const actions = confirming
         ? `<p class="rc-line">Remove ${esc(p.name)} and cancel their open jobs?</p><div class="rc-actions"><button type="button" class="rc-btn rc-danger" data-act="placeRmYes" data-id="${esc(p.id)}"${dis()}>Remove and cancel their open jobs</button><button type="button" class="rc-btn rc-soft" data-act="rmNo">Keep</button></div>`
-        : `<div class="rc-actions"><button type="button" class="rc-btn rc-soft rc-sm" data-act="placeEdit" data-id="${esc(p.id)}">Edit</button><button type="button" class="rc-btn rc-soft rc-sm" data-act="placeRm" data-id="${esc(p.id)}">Remove</button></div>`;
+        : `<div class="rc-actions"><button type="button" class="rc-btn rc-soft rc-sm" data-act="placeCall" data-id="${esc(p.id)}"${dis()}>${icon.phone}<span>Call</span></button><button type="button" class="rc-btn rc-soft rc-sm" data-act="placeEdit" data-id="${esc(p.id)}">Edit</button><button type="button" class="rc-btn rc-soft rc-sm" data-act="placeRm" data-id="${esc(p.id)}">Remove</button></div>`;
       const type = PLACE_TYPES.find(([k]) => k === p.type)?.[1] || p.type || '';
-      return `<div class="rc-cardm rc-entity"><div class="rc-entityhead"><b>${esc(p.name)}</b>${dot(...placeStatus(p))}</div>
+      return `<div class="rc-cardm rc-entity"><div class="rc-entityhead"><b>${esc(p.name)}</b>${dot(...placeStatus(p))}</div>${callNote(p)}
         <p class="rc-line">${esc(type)} · ${esc(p.distanceMiles ?? '?')} mi away · takes up to ${fmt(p.capacity)}</p>
         <p class="rc-line">Accepts ${esc(acceptsText(p))}</p>
         <p class="rc-line">${esc(phoneText(p))}</p>${p.address ? `<p class="rc-line">${esc(p.address)}</p>` : ''}${actions}</div>`;
@@ -1346,6 +1346,13 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       case 'reset': { const r = await act('POST', '/api/demo/reset', {}, { quiet: true }); if (r.ok) { ui = freshUi(); photos = []; saveUi(); note('Reset the rescue. Your partners and volunteers are kept.', true); } else note(r.message, false); render(); break; }
       case 'resetAll': confirmRm = 'all'; render(); break;
       case 'resetAllYes': { const r = await act('POST', '/api/demo/reset-all', {}, { quiet: true }); confirmRm = null; if (r.ok) { ui = freshUi(); photos = []; saveUi(); note('Everything is back to the sample data.', true); } else note(r.message, false); render(); break; }
+      case 'placeCall': {
+        let r;
+        try { r = await call('POST', `/api/places/${encodeURIComponent(id)}/connect`, {}); } catch (e) { r = { ok: false, data: { error: netMessage(e) } }; }
+        const text = r.ok ? r.data?.message || 'Calling you now. Answer to be connected.' : failMessage(r, 'Calling a partner is not on this server yet.');
+        callMsgs.set(id, { ok: r.ok, text, needPhone: !r.ok && /coordinator|your (phone|number)/i.test(text) });
+        render(); break;
+      }
       case 'volCall': {
         let r;
         try { r = await call('POST', `/api/volunteers/${encodeURIComponent(id)}/connect`, {}); } catch (e) { r = { ok: false, data: { error: netMessage(e) } }; }

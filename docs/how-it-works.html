@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Food Rescue HQ: how the code works</title>
+<style>
+  :root { --bg: #F7F6F3; --card: #FFFFFF; --text: #1C1C1A; --muted: #787774; --accent: #40745C; --soft: #EDF2EE; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 20px 40px; }
+  .card { background: var(--card); border-radius: 14px; padding: 28px 32px; }
+  .eyebrow { color: var(--accent); font-size: 14px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin: 0 0 4px; }
+  h1 { font-size: 24px; margin: 0 0 20px; line-height: 1.25; }
+  h2 { font-size: 16px; color: var(--accent); margin: 22px 0 8px; }
+  p { margin: 0 0 10px; }
+  .script { background: var(--soft); border-radius: 12px; padding: 16px 18px; font-size: 16px; }
+  .script p { margin: 0; }
+  ul, ol { margin: 0; padding-left: 20px; }
+  li { margin: 0 0 5px; }
+  code { font-size: 14px; color: var(--accent); }
+  .muted { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <article class="card">
+    <p class="eyebrow">Food Rescue HQ</p>
+    <h1>How the code works</h1>
+
+    <h2>30-second script</h2>
+    <div class="script">
+      <p>It is one Node process. <code>server.js</code> loads <code>artifacts/api-server/server.js</code>, which holds every Express route. A photo goes to <code>estimate.js</code>, which asks OpenAI vision for a JSON count; the mic goes to <code>transcribe.js</code>. Every result lands in <code>core.js</code>, one plain state document with the lot state machine and atomic JSON writes. One tap starts outreach: <code>voice.js</code> calls each partner through Twilio, first press-1 wins, then calls a volunteer. Every change streams to <code>rescue-chat.js</code> over SSE. Browsers never see phone numbers.</p>
+    </div>
+
+    <h2>Code map (in the order a request flows)</h2>
+    <ul>
+      <li><code>server.js</code> entry point; imports the real server.</li>
+      <li><code>artifacts/api-server/server.js</code> Express routes, module wiring, SSE broadcast, and the adapter that hands real phone numbers only to server-side modules.</li>
+      <li><code>lib/core.js</code> state, matching, lots, the two-stage outreach state machine, atomic JSON persistence, phone masking.</li>
+      <li><code>lib/quick.js</code> one typed or spoken sentence becomes event, report and outreach.</li>
+      <li><code>lib/estimate.js</code> OpenAI vision JSON contract, count and recount reconcile.</li>
+      <li><code>lib/transcribe.js</code> multipart audio upload to OpenAI transcription.</li>
+      <li><code>lib/agent.js</code> event-detail questions and match explanations, scripted fallback when no key.</li>
+      <li><code>lib/voice.js</code> Twilio REST calls and TwiML for <code>/voice/offer</code>, <code>/voice/answer</code>, <code>/voice/inbound</code>; first yes wins.</li>
+      <li><code>lib/connect.js</code> click-to-call bridge from the coordinator to a volunteer.</li>
+      <li><code>public/rescue-chat.js</code> single-file UI; state from <code>/api/state</code> plus SSE, tabs, camera, mic recorder.</li>
+      <li><code>public/v.html</code> volunteer page with the Delivered button.</li>
+    </ul>
+
+    <h2>3 design decisions worth saying out loud</h2>
+    <ol>
+      <li>One plain state document, atomic writes, derived totals. No database for a 4-hour build; the Cloudflare D1 port is ready.</li>
+      <li>Every integration is optional and degrades: no OpenAI key means manual entry, no Twilio means simulate. Nothing crashes.</li>
+      <li>Phone numbers never reach the browser. Snapshots carry only <code>phoneSet</code> and <code>phoneLast4</code>.</li>
+    </ol>
+
+    <h2>Tests</h2>
+    <p>Seven self-test files (<code>lib/*.selftest.mjs</code>: core, voice, sms, agent, estimate, transcribe, connect). Run each with <code>node</code>, no network needed.</p>
+
+    <h2>What is next</h2>
+    <p>Cloudflare D1 in the cloud, texting alongside calls, automatic re-offers for unclaimed lots, and login.</p>
+
+    <p class="muted">Hosted from a laptop via Cloudflare Tunnel at foodhq.namosdemos.site. Source: <code>docs/how-it-works.md</code>.</p>
+  </article>
+</main>
+</body>
+</html>

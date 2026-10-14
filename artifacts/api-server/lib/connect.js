@@ -14,21 +14,22 @@ export const NO_VOLUNTEER_PHONE = "Add a phone number for this volunteer first."
 const firstName = (name) => String(name || "the volunteer").trim().split(/\s+/)[0];
 
 // TwiML for the bridged call. Unknown volunteer (or no phone): say so and hang up.
-export function connectTwiml(core, volunteerId) {
-  const v = volunteerId ? core.getVolunteer(volunteerId) : null;
-  const phone = v ? core.volunteerPhone(volunteerId) : "";
+export function connectTwiml(core, volunteerId, placeId) {
+  const v = placeId ? core.getPlace?.(placeId) : volunteerId ? core.getVolunteer(volunteerId) : null;
+  const phone = !v ? "" : placeId ? core.placePhone?.(placeId) || "" : core.volunteerPhone(volunteerId);
   if (!v || !phone) return twiml(`${say("That volunteer is not available.")}<Hangup/>`);
   const from = process.env.TWILIO_FROM_NUMBER || "";
   return twiml(`${say(`Connecting you to ${v.name}.`)}<Dial callerId="${esc(from)}" timeout="25">${esc(phone)}</Dial>${say("The call has ended.")}`);
 }
 
 // Start the call. Returns { status, body } for the HTTP route.
-export async function connectVolunteer(core, volunteerId) {
-  const v = core.getVolunteer(volunteerId);
-  if (!v) return { status: 404, body: { error: "That volunteer no longer exists." } };
+export async function connectVolunteer(core, volunteerId, placeId) {
+  const v = placeId ? core.getPlace?.(placeId) : core.getVolunteer(volunteerId);
+  if (!v) return { status: 404, body: { error: placeId ? "That partner no longer exists." : "That volunteer no longer exists." } };
   const coordinator = core.coordinatorPhone();
   if (!coordinator) return { status: 409, body: { error: NO_COORDINATOR } };
-  if (!core.volunteerPhone(volunteerId)) return { status: 409, body: { error: NO_VOLUNTEER_PHONE } };
+  const theirPhone = placeId ? core.placePhone?.(placeId) : core.volunteerPhone(volunteerId);
+  if (!theirPhone) return { status: 409, body: { error: placeId ? "Add a phone number for this partner first." : NO_VOLUNTEER_PHONE } };
 
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
@@ -39,7 +40,7 @@ export async function connectVolunteer(core, volunteerId) {
   const body = new URLSearchParams({
     To: coordinator,
     From: from,
-    Url: `${publicBase}/voice/connect?volunteerId=${encodeURIComponent(v.id)}`,
+    Url: `${publicBase}/voice/connect?${placeId ? "placeId" : "volunteerId"}=${encodeURIComponent(v.id)}`,
     Method: "POST",
     Timeout: "25",
   });
@@ -63,10 +64,14 @@ export function registerConnect(app, core) {
     const out = await connectVolunteer(core, String(req.params.id ?? ""));
     res.status(out.status).json(out.body);
   });
+  app.post("/api/places/:id/connect", async (req, res) => {
+    const out = await connectVolunteer(core, "", String(req.params.id ?? ""));
+    res.status(out.status).json(out.body);
+  });
   const router = express.Router();
   router.use(express.urlencoded({ extended: false, limit: "8kb" }));
   router.post("/connect", (req, res) => {
-    res.status(200).type("text/xml").send(connectTwiml(core, String(req.query.volunteerId ?? "")));
+    res.status(200).type("text/xml").send(connectTwiml(core, String(req.query.volunteerId ?? ""), String(req.query.placeId ?? "")));
   });
   router.get("/connect", (_req, res) => res.type("text/plain").send("This address is for Twilio. It is working. Calls are sent here with POST."));
   app.use("/voice", router);
