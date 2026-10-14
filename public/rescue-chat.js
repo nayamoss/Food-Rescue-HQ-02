@@ -194,7 +194,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   let estimating = false;
   let alerting = false;
   let deferred = false;
-  let tab = NAV.some(([id]) => id === store.get('rc-tab', 'rescue')) ? store.get('rc-tab', 'rescue') : 'rescue';
+  let tab = 'rescue'; // always open on Rescue
   let navOpen = store.get('rc-nav', '1') === '1';
   let statusOpen = store.get('rc-status', '1') === '1';
   let sheetView = null; // null | 'status' | 'account'

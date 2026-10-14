@@ -36,18 +36,18 @@ export const NO_PHONE = "No partner has a phone number yet. Add one in Partners 
 const lc = (s) => String(s ?? "").toLowerCase();
 
 const seedPlaces = () => [
-  { id: "p1", name: "Partner shelter A", type: "shelter", distanceMiles: 2, capacity: 150, accepts: ["prepared", "packaged", "drinks"], phone: "" },
+  { id: "p1", name: "Partner shelter A", type: "shelter", distanceMiles: 2, capacity: 150, accepts: ["prepared", "packaged", "drinks"], phone: process.env.DEMO_PHONE || "" },
   { id: "p2", name: "Partner shelter B", type: "shelter", distanceMiles: 4, capacity: 200, accepts: ["prepared", "packaged", "drinks"], phone: "" },
   { id: "p3", name: "Community kitchen", type: "kitchen", distanceMiles: 6, capacity: 100, accepts: ["prepared", "packaged"], phone: "" },
 ];
 const seedVolunteers = () => [
   { id: "v1", name: "Alex Rivera", phone: "", optedIn: true, status: "ready" },
-  { id: "v2", name: "Jordan Lee", phone: "", optedIn: true, status: "ready" },
+  { id: "v2", name: "Jordan Lee", phone: process.env.DEMO_PHONE || "", optedIn: true, status: "ready" },
   { id: "v3", name: "Sam Taylor", phone: "", optedIn: true, status: "ready" },
 ];
 const initial = () => ({
   event: null, report: null, places: seedPlaces(), lots: [], offers: [], volunteers: seedVolunteers(),
-  incident: null, feed: [], settings: { coordinatorPhone: "" }, lastRescue: null,
+  incident: null, feed: [], settings: { coordinatorPhone: process.env.DEMO_PHONE || "" }, lastRescue: null,
 });
 
 // ---- load + normalise -------------------------------------------------------
@@ -326,7 +326,8 @@ export function postUpdate(text) {
 }
 // Clears the event, report, offers, incident and feed. Keeps the volunteers and places the user has.
 export function reset() {
-  commit({ ...initial(), places: state.places, volunteers: state.volunteers.map((v) => ({ ...v, status: "ready" })), settings: state.settings });
+  // Keep the event, partners, volunteers and settings; only the rescue itself is cleared.
+  commit({ ...initial(), event: state.event, places: state.places, volunteers: state.volunteers.map((v) => ({ ...v, status: "ready" })), settings: state.settings });
   return snapshot();
 }
 // Full reset: back to the seeded places and volunteers (no phones).
