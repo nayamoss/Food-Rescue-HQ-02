@@ -391,7 +391,17 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     }
     const noPhone = !places().some(phoneSet);
     const can = foodLine(items) && !alerting && !noPhone;
-    return hqRow(`<div class="rc-cardm rc-confirm"><p class="rc-sentence">${esc(sentence)}</p>${where}
+    const e = event();
+    const c = ui.count || {};
+    const evName = c.eventName ?? (e?.name || '');
+    const evVenue = c.venue ?? (e?.venue || '');
+    const fields = fromReport
+      ? `<p class="rc-line">Event: ${esc(e?.name || '')}${e?.venue ? ` · ${esc(e.venue)}` : ''}</p>`
+      : `<label class="rc-fld"><span>Event</span><input data-f="cf" data-k="eventName" value="${esc(evName || `Leftovers at ${evVenue || 'the venue'}`)}" placeholder="Conference lunch" autocomplete="off"></label>
+         <label class="rc-fld"><span>Where</span><input data-f="cf" data-k="venue" value="${esc(evVenue)}" placeholder="Main hall" autocomplete="off"></label>`;
+    const withPhone = places().filter(phoneSet).length;
+    const near = `<p class="rc-line">Partners nearby: ${fmt(places().length)} partners, ${fmt(withPhone)} with a phone${withPhone ? '' : '. <button type="button" class="rc-link" data-act="tab" data-v="places">Add a phone</button>'}</p>`;
+    return hqRow(`<div class="rc-cardm rc-confirm">${fields}<p class="rc-line">Available</p><p class="rc-sentence">${esc(sentence)}</p>${where}${near}
       ${ui.count?.confidenceNote ? `<p class="rc-hint">${esc(ui.count.confidenceNote)}</p>` : ''}
       <button type="button" class="rc-btn rc-primary rc-big" data-act="alert"${can && !busy ? '' : ' disabled'}>${alerting ? 'Alerting partners' : 'Yes, alert partners'}</button>
       ${noPhone ? `<p class="rc-warn" role="status">${esc(NO_PHONE)} <button type="button" class="rc-link" data-act="tab" data-v="places">Add a phone</button></p>` : ''}
@@ -485,8 +495,8 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const st = rescueStage();
     const parts = [];
     if (!e) {
-      parts.push(hqRow(bubble('Pick today’s event to start, or tap the mic and say what’s left.') +
-        `<div class="rc-cardm"><p class="rc-line">No event yet.</p><div class="rc-actions"><button type="button" class="rc-btn rc-soft" data-act="newEvent">Add an event</button></div></div>`));
+      parts.push(hqRow(bubble('Which event is this? Tap the mic or type it, like “Tech conference lunch at the main hall”.') +
+        `<div class="rc-cardm"><p class="rc-line">No event yet.</p><div class="rc-actions">${events().length ? '<button type="button" class="rc-btn rc-soft" data-act="tab" data-v="events">Pick an existing event</button>' : ''}<button type="button" class="rc-btn rc-soft" data-act="newEvent">Add an event</button></div></div>`));
     } else {
       parts.push(`<div class="rc-sys">${esc(e.name)}${e.venue ? ` · ${esc(e.venue)}` : ''}${e.date ? ` · ${esc(niceDate(e.date))}` : ''}</div>`);
       if (st === 'count') parts.push(hqRow(bubble(`What’s left from ${esc(e.name)}?`) + photoBlock(Boolean(ui.count))));
@@ -545,7 +555,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const note = mine ? rec.note : '';
     slot('recnote').textContent = note;
     slot('recnote').hidden = !note;
-    input.placeholder = st === 'outreach' || st === 'done' ? 'Post an update to the team' : st === 'ready' || ui.count ? 'Say or type “yes” to alert partners' : 'Say or type what’s left';
+    input.placeholder = st === 'outreach' || st === 'done' ? 'Post an update to the team' : st === 'ready' || ui.count ? 'Say or type “yes” to alert partners' : !event() ? 'Say or type which event this is' : 'Say or type what’s left';
     composer.querySelector('.rc-send').disabled = busy || !state;
   }
   const recTime = () => { const s = Math.floor((Date.now() - rec.started) / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -928,8 +938,11 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
         if (!event()) {
           const venue = c.venue || 'Event venue';
           const r = await act('POST', '/api/event', { name: c.eventName || `Leftovers at ${venue}`, venue, date: todayIso(), goodForMinutes: c.goodForMinutes || 45,
-            items: c.items.filter((i) => num(i.left) > 0).map((i) => ({ item: i.item, ordered: num(i.left) })) });
+            items: c.items.filter((i) => num(i.ordered ?? i.left) > 0).map((i) => ({ item: i.item, ordered: num(i.ordered ?? i.left) })) });
           if (!r.ok) return;
+        } else if ((c.eventName && c.eventName !== event().name) || (c.venue && c.venue !== event().venue)) {
+          const r = await act('PATCH', '/api/event', { name: c.eventName || event().name, venue: c.venue || event().venue }, { quiet: true });
+          if (!r.ok && !r.missing) return;
         }
         const rows = c.items.map((i) => ({ item: i.item, left: num(i.left), unit: i.unit || 'portions', source: c.source === 'voice' ? 'manual' : c.source || 'manual', ...(i.confidence ? { confidence: i.confidence } : {}) }));
         for (const it of event()?.items || []) if (!rows.some((x) => lower(x.item) === lower(it.item))) rows.push({ item: it.item, left: 0, unit: 'portions', source: rows[0]?.source || 'manual' });
@@ -1012,9 +1025,9 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     carryTalk = false;
     if (r.ok && r.data?.quick?.preview) {
       const u = r.data.quick.understood || {};
-      const items = (Array.isArray(u.items) ? u.items : []).map((i) => ({ item: lower(i.item), left: num(i.left), unit: i.unit || 'portions' }));
+      const items = (Array.isArray(u.items) ? u.items : []).map((i) => ({ item: lower(i.item), left: num(i.left), unit: i.unit || 'portions', ...(Number.isFinite(Number(i.ordered)) && num(i.ordered) > 0 ? { ordered: num(i.ordered) } : {}) }));
       for (const it of event()?.items || []) if (!items.some((x) => lower(x.item) === lower(it.item))) items.push({ item: it.item, left: 0, unit: 'portions' });
-      ui.count = { source: 'voice', items, venue: event() ? '' : u.venue || '', goodForMinutes: event() ? null : r.data.quick.goodForMinutes || null, eventName: u.eventName || '' };
+      ui.count = { source: 'voice', items, venue: event() ? event().venue || '' : u.venue || '', goodForMinutes: event() ? null : r.data.quick.goodForMinutes || null, eventName: event() ? event().name || '' : u.eventName || '' };
       ui.editing = false; photos = [];
       say('hq', `Got it: about ${foodLine(items) || 'your leftovers'}${u.venue && !event() ? ` at ${u.venue}` : ''}. Tap Yes, alert partners to start calling.`);
     } else if (r.ok) {
@@ -1044,6 +1057,18 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       const hit = ui.count.items.find((i) => lower(i.item).replace(/s$/, '').startsWith(word) || word.startsWith(lower(i.item).replace(/s$/, '')));
       if (hit) { hit.left = Number(fix[1]); say('hq', `Changed to ${fmt(hit.left)} ${lower(hit.item)}.`); } else say('hq', `I could not find ${fix[2]} in the list. Use Edit amounts.`);
       render(); scrollThread(); return;
+    }
+    if (!event() && !pendingCount) {
+      // The event comes first. Amounts said before an event still create the event from what we can parse.
+      const p = parseSpoken(text);
+      const at = text.match(/^(.*?)\s+at\s+(.+)$/i);
+      const name = p.eventName || (p.items.length ? '' : at ? at[1].trim() : text) || `Leftovers at ${p.venue || (at ? at[2].trim() : 'the venue')}`;
+      const venue = p.venue || (at ? at[2].trim() : '') || '';
+      say('me', text); render(); scrollThread();
+      const r = await act('POST', '/api/event', { name, venue, date: todayIso(), items: [] }, { quiet: true });
+      if (!r.ok) { say('hq', r.message || 'I could not save the event. Try again.'); render(); return; }
+      if (p.items.length) { ui.count = { source: 'voice', items: p.items, venue, goodForMinutes: p.goodForMinutes, eventName: name }; ui.editing = false; saveUi(); render(); scrollThread(); return; }
+      say('hq', `Got it: ${name}${venue ? ` at ${venue}` : ''}. Now what’s left? Take a photo or say the amounts.`); render(); scrollThread(); return;
     }
     if (st === 'none' || st === 'count') return quickStart(text);
     if (st === 'ready') { say('me', text); say('hq', 'Say “yes” or tap Yes, alert partners to start calling.'); render(); scrollThread(); return; }
@@ -1225,6 +1250,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     if (f === 'draft' && evView.draft) evView.draft[t.dataset.k] = t.value;
     else if (f === 'draft-item' && evView.draft) evView.draft.items[i][t.dataset.k] = t.dataset.k === 'ordered' ? num(t.value) : t.value;
     else if (f === 'count' && ui.count) { ui.count.items[i].left = num(t.value); saveUi(); }
+    else if (f === 'cf' && ui.count) { ui.count[t.dataset.k] = t.value; saveUi(); }
     else if (f === 'pf' && pform) pform[t.dataset.k] = t.value;
     else if (f === 'vf' && vform) vform[t.dataset.k] = t.value;
   };
