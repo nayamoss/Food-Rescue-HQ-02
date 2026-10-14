@@ -67,6 +67,7 @@ app.use((req, _res, next) => {
   next();
 });
 app.disable("x-powered-by");
+(await import("./lib/voice.js")).registerVoice(app, globalThis.foodRescueCore ?? {}); // Twilio voice webhooks; core is injected by the main server
 app.use(express.json({ limit: "8kb" }));
 app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
 app.get("/api/healthz", (_req, res) => res.json({ status: "ok" }));
