@@ -1,5 +1,5 @@
 // Rescue chat: the whole rescue as one thread (event, questions, photo, places, outreach, summary).
-import { createMock } from '/mock-api.js'; // mock: demo stand-in, only used when an endpoint is missing (404)
+// Everything here talks to the real server. When the server says no, we show its message in plain words.
 
 const STAGES = ['event', 'details', 'photo', 'match', 'outreach', 'done'];
 const RING_R = 92;
@@ -8,11 +8,17 @@ const AVATARS = [['#E3EDE8', '#40745C'], ['#F3E6DD', '#9A4F2B'], ['#E6E9F2', '#4
 const MAX_PHOTOS = 4;
 const MAX_SIDE = 1600;
 const STATUS_WORD = { offered: 'Asked', accepted: 'Accepted', declined: 'Declined', picked_up: 'On the way', dropped_off: 'Dropped off' };
+const PLACE_TYPES = ['shelter', 'kitchen', 'food bank'];
+const ACCEPTS = [['prepared', 'Prepared food'], ['packaged', 'Packaged food'], ['drinks', 'Drinks']];
 const RAW_LOG = /(^|\s)[\w.-]+=\S|\b[a-z]+_[a-z]+\b|[{}[\]]|\b(undefined|null|NaN)\b|\b[0-9a-f]{8}-[0-9a-f]{4}\b|^(POST|GET|PATCH|PUT)\b|https?:\/\/|\+?\d[\d\s().-]{8,}\d/i;
+const MISSING = 'Endpoint not found.';
+// Outreach is by voice call only. Any texting notes from the server are kept out of the thread.
+const TEXTING = /^texted\b|\btext message|\bsms\b|reply yes/i;
 
 const icon = {
   logo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>',
   up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
 };
 
@@ -22,14 +28,17 @@ const TEMPLATE = `
     <div class="rc-brand"><span class="rc-logo">${icon.logo}</span>Food Rescue HQ</div>
     <p class="rc-label">Event</p>
     <div class="rc-chan"><div><b data-slot="chan-title">No event yet</b><small data-slot="chan-sub"></small></div></div>
-    <p class="rc-label">Team</p>
+    <div class="rc-labelrow"><p class="rc-label">Team</p><button type="button" class="rc-btn rc-sm" data-act="view" data-v="team">Manage</button></div>
     <ul class="rc-team" data-slot="team-side"></ul>
-    <p class="rc-foot">Demo mode. Phone numbers stay private.</p>
+    <div class="rc-labelrow"><p class="rc-label">Places</p><button type="button" class="rc-btn rc-sm" data-act="view" data-v="places">Manage</button></div>
+    <ul class="rc-team" data-slot="places-side"></ul>
+    <p class="rc-foot">Phone numbers stay private. Only the last 4 digits are shown.</p>
   </aside>
   <main class="rc-main">
     <header class="rc-top">
       <div class="rc-brand rc-brand-m"><span class="rc-logo">${icon.logo}</span>Food Rescue HQ</div>
       <span class="rc-live" role="status"><i></i><span data-slot="live">Connecting to HQ</span></span>
+      <button type="button" class="rc-btn rc-team-btn" data-act="view" data-v="team">Team</button>
       <button type="button" class="rc-btn rc-demo-btn" data-act="demo" aria-expanded="false">Demo</button>
     </header>
     <div class="rc-demo" data-slot="demo" hidden>
@@ -37,7 +46,7 @@ const TEMPLATE = `
       <button type="button" class="rc-btn" data-act="ff">Fast-forward 1 minute</button>
       <button type="button" class="rc-btn" data-act="reset">Reset</button>
     </div>
-    <button type="button" class="rc-pin" data-act="sheet" aria-expanded="false" aria-controls="rc-sheet">
+    <button type="button" class="rc-pin" data-act="view" data-v="status" aria-expanded="false" aria-controls="rc-sheet">
       ${ring(40, 26)}
       <span class="rc-pin-txt"><b data-t="timer">--:--</b><small data-slot="pin-sub">Getting the latest</small></span>
       <span class="rc-chip" data-slot="chip">Not started</span>
@@ -57,8 +66,8 @@ const TEMPLATE = `
   <aside class="rc-status" aria-label="Rescue status" data-slot="status-desk"></aside>
   <div class="rc-scrim" data-act="close" hidden></div>
   <section class="rc-sheet" id="rc-sheet" role="dialog" aria-modal="true" aria-labelledby="rc-sheet-title" hidden>
-    <div class="rc-sheet-head"><h2 id="rc-sheet-title">Rescue status</h2><button type="button" class="rc-btn" data-act="close">Close</button></div>
-    <div data-slot="status-sheet"></div>
+    <div class="rc-sheet-head"><h2 id="rc-sheet-title" data-slot="sheet-title">Rescue status</h2><button type="button" class="rc-btn" data-act="close">Close</button></div>
+    <div class="rc-sheet-body" data-slot="status-sheet"></div>
   </section>
 </div>`;
 
@@ -72,6 +81,7 @@ const num = (value) => Math.max(0, Math.round(Number(value) || 0));
 const fmt = (value) => num(value).toLocaleString();
 const sum = (list, fn) => list.reduce((t, x) => t + num(fn(x)), 0);
 const initials = (name) => String(name || 'V').trim().split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+const firstName = (name) => String(name || 'them').trim().split(/\s+/)[0];
 const clock = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 function niceDate(value) {
@@ -80,11 +90,25 @@ function niceDate(value) {
   const d = new Date(`${value}T12:00:00`);
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
+// Phone status without ever showing the number. Older servers send `phone`; we only read its last 4 digits.
+const phoneSet = (v) => (typeof v?.phoneSet === 'boolean' ? v.phoneSet : /^\+\d{8,}$/.test(String(v?.phone || '')));
+const phoneLast4 = (v) => String(v?.phoneLast4 || String(v?.phone || '').replace(/\D/g, '').slice(-4) || '');
+const phoneText = (v) => (phoneSet(v) ? `Phone added, ends in ${phoneLast4(v)}` : 'No phone yet');
+// US numbers typed any way. The server adds +1 and has the final say, so we send the text as typed.
+const phoneOk = (raw) => String(raw || '').replace(/\D/g, '').length >= 10;
+const PHONE_HELP = 'Enter the full phone number, for example 762 235 7374.';
+
+const Speech = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
+const QUICK_EXAMPLE = '100 tacos and 10 sandwiches at the main hall, good for 45 minutes';
+const listWords = (arr) => (arr.length <= 1 ? arr.join('') : `${arr.slice(0, -1).join(', ')} and ${arr[arr.length - 1]}`);
+
 const SAMPLE_EVENT = () => ({
   name: 'Conference lunch', venue: 'Main hall', date: todayIso(),
   items: [{ item: 'Tacos', ordered: 400 }, { item: 'Sandwiches', ordered: 20 }, { item: 'Chips', ordered: 10 }],
 });
-const freshUi = () => ({ draft: { name: '', venue: '', date: todayIso(), items: [{ item: '', ordered: '' }] }, qa: {}, confirmed: false, stageAt: {}, mode: 'photo', manual: {}, est: null, estMessage: '', phone: {}, phoneSaved: {}, offerEdits: {}, formError: '', eventId: null });
+const freshUi = () => ({ draft: { name: '', venue: '', date: todayIso(), items: [{ item: '', ordered: '' }] }, chat: [], chips: [], agentDone: false, newEvent: false, stageAt: {}, mode: 'photo', manual: {}, est: null, estMessage: '', offerEdits: {}, callNote: {}, formError: '', eventId: null, quickText: '', quickError: '', quick: null, stepByStep: false });
+const blankPlace = () => ({ name: '', type: 'shelter', distanceMiles: '', capacity: '', accepts: ['prepared', 'packaged', 'drinks'], address: '' });
+const freshForms = () => ({ vol: { name: '', phone: '' }, volEdit: null, place: blankPlace(), placeEdit: null, confirm: null, msg: '', ok: false });
 
 export function mountRescueChat(root, { apiBase = '' } = {}) {
   const lifecycle = new AbortController();
@@ -99,13 +123,18 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   let asks = [];
   let threadHtml = '';
   let lastUrg = null;
-  let mock = null; // mock: set when a new endpoint is missing
   let photos = []; // data URLs, never persisted
   let photoBusy = 0;
   let estimating = false;
   let demoOpen = false;
   let deferred = false;
+  let view = null; // null | 'status' | 'team' | 'places'
+  let forms = freshForms();
+  let agentBusy = false;
+  let agentError = '';
+  let explain = { key: '', text: '', loading: false };
   let ui = freshUi();
+  let listening = null; // active SpeechRecognition while the mic is on
   try { const saved = JSON.parse(sessionStorage.getItem('rc-ui') || 'null'); if (saved) ui = { ...freshUi(), ...saved, est: null }; } catch { /* start fresh */ }
   const saveUi = () => { try { sessionStorage.setItem('rc-ui', JSON.stringify({ ...ui, est: null })); } catch { /* storage is optional */ } };
 
@@ -132,7 +161,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     return Number.isFinite(deadline) ? Math.max(0, Math.ceil((deadline - Date.now()) / 1000)) : 0;
   };
   const windowSeconds = () => Math.max(num(incident()?.windowSeconds) || 2700, secondsLeft(), 1);
-  const OPEN = ['accepted', 'picked_up', 'dropped_off'];
+  const latestOffer = (vid) => offers().filter((o) => o.volunteerId === vid && o.status !== 'proposed').pop();
 
   function remaining() {
     const rows = (report()?.items || []).map((it) => {
@@ -147,16 +176,15 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   const needList = (r) => r.rows.filter((x) => x.need > 0).map((x) => `${fmt(x.need)} ${esc(x.item)}`).join(', ');
 
   function stage() {
-    if (!event()) return 'event';
-    const srv = state.journeyStep;
-    if (!report()) return ui.confirmed || ['photo', 'match', 'outreach', 'done'].includes(srv) ? 'photo' : 'details';
+    if (!event() || ui.newEvent) return 'event';
+    if (!report()) return ui.agentDone ? 'photo' : 'details';
     const r = remaining();
-    if (srv === 'done' || (incident() && !isActiveInc()) || (r.left > 0 && r.rescued >= r.left) || r.left === 0) return 'done';
+    if (state.journeyStep === 'done' || (incident() && !isActiveInc()) || (r.left > 0 && r.rescued >= r.left) || r.left === 0) return 'done';
     return offers().some((o) => o.status !== 'proposed') ? 'outreach' : 'match';
   }
   function urgency() {
     const inc = incident();
-    if (!inc || !report()) return 'idle';
+    if (ui.newEvent || !inc || !report()) return 'idle';
     const r = remaining();
     if (inc.status === 'resolved' || r.left === 0 || (r.left > 0 && r.rescued >= r.left)) return 'done';
     if (!isActiveInc()) return 'ended';
@@ -189,6 +217,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   const bubble = (html) => `<div class="rc-bub">${html}</div>`;
   const meRow = (text) => `<div class="rc-row rc-me"><div class="rc-col"><div class="rc-bub me">${esc(text)}</div></div></div>`;
   const dis = () => (busy || !state ? ' disabled' : '');
+  const chipFor = (o, v) => (o ? (STATUS_WORD[o.status] || 'Asked') : (v?.optedIn === false ? 'Not taking asks' : 'Ready'));
 
   // ---- thread blocks ------------------------------------------------------
   function eventCard() {
@@ -206,46 +235,55 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       <div class="rc-actions"><button type="button" class="rc-btn" data-act="addrow">Add a food item</button></div>
       ${ui.formError ? `<p class="rc-warn" role="alert">${esc(ui.formError)}</p>` : ''}
       <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="saveEvent"${dis()}>Save event</button>
-      <button type="button" class="rc-btn" data-act="sample"${dis()}>Sample event</button></div></div>`;
+      ${ui.newEvent ? '<button type="button" class="rc-btn" data-act="cancelNew">Back to the last rescue</button>' : ''}</div>
+      <button type="button" class="rc-link" data-act="quickPath">Use the quick start instead</button></div>`;
   }
+  // Fast path: say or type what is left, one tap starts everything.
+  function quickCard() {
+    const has = Boolean(ui.quickText.trim());
+    const mic = Speech ? `<button type="button" class="rc-mic${listening ? ' on' : ''}" data-act="mic" aria-pressed="${Boolean(listening)}">${icon.mic}<span>${listening ? 'Listening. Tap to stop' : 'Tap and say what’s left'}</span></button>` : '';
+    return `<div class="rc-cardm rc-quickstart">${mic}
+      <label class="rc-fld"><span>${Speech ? 'or type it' : 'Type what is left'}</span><textarea rows="3" data-f="quick" placeholder="What food is left, where, and for how long">${esc(ui.quickText)}</textarea></label>
+      <p class="rc-hint">For example: “${esc(QUICK_EXAMPLE)}”</p>
+      ${ui.quickError ? `<p class="rc-warn" role="alert">${esc(ui.quickError)}</p>` : ''}
+      <button type="button" class="rc-btn rc-primary rc-big" data-act="quickStart"${busy || !state || !has ? ' disabled' : ''}>${busy ? 'Starting the rescue' : 'Start rescue'}</button>
+      <button type="button" class="rc-link" data-act="stepByStep">Set it up step by step</button></div>`;
+  }
+  function quickSummary(understood, snap) {
+    const u = understood || {};
+    const items = (Array.isArray(u.items) ? u.items : []).filter((i) => num(i.left) > 0).map((i) => `${fmt(i.left)} ${i.item}`);
+    const venue = u.venue || snap?.event?.venue || '';
+    const mins = Number.isFinite(Number(u.goodForMinutes)) && u.goodForMinutes ? Number(u.goodForMinutes) : snap?.event?.goodForMinutes;
+    let text = `Got it: ${listWords(items) || 'your leftovers'}${venue ? ` at ${venue}` : ''}${mins ? `, good for ${mins} minutes` : ''}.`;
+    const asked = (snap?.volunteers || []).filter((v) => (snap.offers || []).some((o) => o.volunteerId === v.id && o.status === 'offered'));
+    const noPhone = asked.filter((v) => !phoneSet(v)).map((v) => firstName(v.name));
+    if (asked.length) text += ' Calling volunteers now.';
+    if (noPhone.length) text += ` ${listWords(noPhone)} ${noPhone.length > 1 ? 'have' : 'has'} no phone yet. Add one so HQ can call.`;
+    return text;
+  }
+
   const itemsLine = (list) => (list || []).map((i) => `${fmt(i.ordered)} ${esc(i.item)}`).join(', ');
   function eventSummary() {
     const e = event();
     return `<div class="rc-cardm"><h3>${esc(e.name)}</h3><p class="rc-line">${esc(e.venue)}${e.date ? ` · ${esc(niceDate(e.date))}` : ''}</p><p class="rc-line">Ordered: ${itemsLine(e.items)}</p></div>`;
   }
 
-  const QUESTIONS = [
-    { key: 'minutes', text: 'How long is the food good for?', opts: ['30', '45', '60'] },
-    { key: 'pickup', text: 'Where should volunteers pick it up?' },
-    { key: 'contact', text: 'Who should volunteers ask for on site? Type a name below.' },
-  ];
-  const currentQ = () => QUESTIONS.find((q) => ui.qa[q.key] === undefined) || null;
-  function qaLabel(key) {
-    const v = ui.qa[key];
-    if (key === 'minutes') return `${v} minutes`;
-    if (key === 'pickup') return v === event()?.venue ? `Use the venue (${v})` : String(v);
-    return v === '' ? 'Skip for now' : String(v);
-  }
-  function understood(locked) {
+  function understood() {
     const e = event();
     const rows = [['Event', esc(e.name)], ['Venue', esc(e.venue)], ['Date', esc(niceDate(e.date))], ['Food', itemsLine(e.items)],
-      ['Good for', `${esc(ui.qa.minutes)} minutes`], ['Pickup', esc(ui.qa.pickup)], ['Contact', ui.qa.contact ? esc(ui.qa.contact) : 'Not set']];
-    return `<div class="rc-cardm"><h3>What I understood</h3>${rows.map(([k, v]) => `<p class="rc-kv"><span>${k}</span><b>${v}</b></p>`).join('')}
-      ${locked ? '' : `<div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="looksRight"${dis()}>Looks right</button><button type="button" class="rc-btn" data-act="qaReset">Change answers</button></div>`}</div>`;
+      ['Good for', Number.isFinite(e.goodForMinutes) ? `${fmt(e.goodForMinutes)} minutes` : 'Not set'],
+      ['Contact', e.contact ? esc(e.contact) : 'Not set'], ['Notes', e.notes ? esc(e.notes) : 'None']];
+    return `<div class="rc-cardm"><h3>What I understood</h3>${rows.map(([k, v]) => `<p class="rc-kv"><span>${k}</span><b>${v}</b></p>`).join('')}</div>`;
   }
   function detailsBlock(locked) {
-    let html = '';
-    const q = currentQ();
-    for (const item of QUESTIONS) {
-      if (ui.qa[item.key] === undefined) break;
-      html += hqRow(bubble(esc(item.text))) + meRow(qaLabel(item.key));
+    let html = ui.chat.map((m) => (m.role === 'user' ? meRow(m.text) : hqRow(bubble(esc(m.text))))).join('');
+    if (agentBusy) html += hqRow(bubble('<span class="rc-typing">HQ is thinking</span>'));
+    else if (agentError && !locked) html += hqRow(`<div class="rc-warn" role="alert">${esc(agentError)}</div><div class="rc-actions"><button type="button" class="rc-btn" data-act="agentRetry">Try again</button></div>`);
+    if (locked || ui.agentDone) return html + hqRow(understood());
+    if (Number.isFinite(event().goodForMinutes) && ui.chat.length) {
+      html += '<div class="rc-skip"><button type="button" class="rc-btn rc-sm" data-act="skipQs">Skip to the photo</button></div>';
     }
-    if (!q) return html + hqRow(bubble('Here is what I understood. Does it look right?') + understood(locked));
-    const opts = q.key === 'minutes' ? q.opts.map((m) => `<button type="button" class="rc-btn" data-act="qa" data-v="${m}"${dis()}>${m} minutes</button>`).join('')
-      : q.key === 'pickup' ? `<button type="button" class="rc-btn" data-act="qa" data-v="${esc(event().venue)}"${dis()}>Use the venue (${esc(event().venue)})</button>`
-      : `<button type="button" class="rc-btn" data-act="qa" data-v=""${dis()}>Skip for now</button>`;
-    const hint = q.key === 'minutes' ? '' : '<p class="rc-hint">Or type your answer below.</p>';
-    return html + hqRow(bubble(esc(q.text)) + `<div class="rc-opts">${opts}</div>${hint}`);
+    return html;
   }
 
   function photoCard() {
@@ -279,8 +317,10 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     return hqRow(bubble('Now take a photo of the food that is left, or count it by hand.') + `<div class="rc-cardm">${body}</div>`);
   }
 
+  const proposed = () => offers().filter((o) => o.status === 'proposed');
+  const explainKey = () => proposed().map((o) => `${o.id}:${o.portions}`).join('|');
   function placesCard() {
-    const list = offers().filter((o) => o.status === 'proposed');
+    const list = proposed();
     if (!list.length) return hqRow(bubble('I am matching the leftovers to places that can take them.'));
     const rows = list.map((o) => {
       const p = placeOf(o);
@@ -288,32 +328,31 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       return `<div class="rc-itemrow"><div class="rc-grow"><b>${esc(p?.name || 'Partner')}</b><p class="rc-line">${esc(p?.type || '')}${p?.distanceMiles != null ? ` · ${esc(p.distanceMiles)} mi away` : ''} · ${esc(o.item)}</p></div>
         <label class="rc-fld rc-qty"><span>Portions</span><input type="number" min="0" inputmode="numeric" data-f="offer" data-id="${esc(o.id)}" value="${esc(val)}"></label></div>`;
     }).join('');
+    const why = explain.loading ? '<p class="rc-line">Working out why these places fit.</p>' : esc(explain.text || '');
     return hqRow(bubble('These places can take the food. Change the portions if you need to.') + `<div class="rc-cardm">${rows}
-      <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="sendOffers"${dis()}>Approve and reach out</button></div></div>`);
+      <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="sendOffers"${dis()}>Approve and reach out</button></div></div>
+      ${why ? `<div class="rc-cardm rc-why"><p class="rc-sub">Why these places</p><p>${why}</p></div>` : ''}`);
   }
 
-  function chipFor(o, v) {
-    return o ? (STATUS_WORD[o.status] || 'Asked') : (v?.optedIn === false ? 'Not opted in' : 'Ready');
-  }
   function outreachCard() {
     const rows = volunteers().map((v) => {
-      const mine = offers().filter((o) => o.volunteerId === v.id && o.status !== 'proposed');
-      const o = mine[mine.length - 1];
+      const o = latestOffer(v.id);
       const p = o && placeOf(o);
       const b = (act, label) => `<button type="button" class="rc-btn rc-sm" data-act="${act}" data-id="${esc(o.id)}"${dis()}>${label}</button>`;
-      const demo = !o ? '' : o.status === 'offered' ? b('accept', 'Accept') + b('decline', 'Decline')
+      const update = !o ? '' : o.status === 'offered' ? b('accept', 'Accept') + b('decline', 'Decline')
         : o.status === 'accepted' ? b('pickup', 'Mark picked up') : o.status === 'picked_up' ? b('dropoff', 'Mark dropped off') : '';
-      const saved = ui.phoneSaved[v.id];
+      const open = o && ['offered', 'accepted'].includes(o.status);
+      const hasPhone = phoneSet(v);
+      const callRow = open ? `<div class="rc-actions rc-callrow"><button type="button" class="rc-btn rc-primary" data-act="call" data-id="${esc(o.id)}" data-vid="${esc(v.id)}"${busy || !hasPhone ? ' disabled' : ''}>Call ${esc(firstName(v.name))} now</button>
+          ${hasPhone ? `<span class="rc-hint">${esc(phoneText(v))}</span>` : `<span class="rc-hint">No phone yet.</span><button type="button" class="rc-link" data-act="addPhone" data-id="${esc(v.id)}">Add phone</button>`}</div>` : '';
+      const note = ui.callNote[v.id];
       return `<div class="rc-vol"><div class="rc-volhead">${avatarHtml({ name: v.name, vol: v })}<div class="rc-grow"><b>${esc(v.name)}</b>
           <p class="rc-line">${o ? `${fmt(o.portions)} ${esc(o.item)} to ${esc(p?.name || 'a partner')}` : 'No ask yet'}</p></div><span class="rc-stt ${o ? esc(o.status) : ''}">${chipFor(o, v)}</span></div>
-        <div class="rc-phone"><label class="rc-fld rc-grow"><span>1. Phone number for ${esc(v.name)}</span><input type="tel" autocomplete="off" data-f="phone" data-id="${esc(v.id)}" value="${esc(ui.phone[v.id] || '')}" placeholder="+15551234567"></label>
-        <button type="button" class="rc-btn rc-sm" data-act="savePhone" data-id="${esc(v.id)}"${dis()}>Save phone</button></div>
-        ${saved ? '<p class="rc-hint">Saved. It is kept private.</p>' : ''}
-        ${o && ['offered', 'accepted'].includes(o.status) ? `<div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="call" data-id="${esc(o.id)}" data-vid="${esc(v.id)}"${dis()}>2. Call ${esc(v.name.split(' ')[0])} now</button></div>` : ''}
-        ${(ui.callNote || {})[v.id] ? `<p class="rc-hint">${esc(ui.callNote[v.id])}</p>` : ''}
-        ${demo ? `<div class="rc-actions">${demo}</div>` : ''}</div>`;
+        ${callRow}
+        ${note ? `<p class="${note.ok ? 'rc-ok' : 'rc-warn'}" role="status">${esc(note.text)}</p>` : ''}
+        ${update ? `<div class="rc-statusgrp"><p class="rc-sub">Update status</p><div class="rc-actions">${update}</div></div>` : ''}</div>`;
     }).join('');
-    return hqRow(bubble('Reaching out to volunteers. Add a phone number, then tap Call now. They hear the offer and press 1 to accept, or 2 to decline.') + `<div class="rc-cardm">${rows}</div>`);
+    return hqRow(bubble('Reaching out to volunteers. Tap Call now: they hear the offer and press 1 to accept or 2 to decline.') + `<div class="rc-cardm">${rows}</div>`);
   }
 
   function summaryData() {
@@ -328,17 +367,16 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   }
   function summaryCard() {
     const d = summaryData();
-    const urg = urgency();
-    const line = urg === 'done' ? 'Everything that was left found a home.' : 'The window closed. Here is how it went.';
+    const line = urgency() === 'done' ? 'Everything that was left found a home.' : 'The window closed. Here is how it went.';
     return hqRow(bubble(line) + `<div class="rc-cardm"><h3>Rescue summary</h3>
       ${[['Ordered', d.ordered], ['Eaten', d.eaten], ['Left over', d.left], ['Rescued', d.rescued], ['Not rescued', d.notRescued]].map(([k, v]) => `<p class="rc-kv"><span>${k}</span><b>${fmt(v)}</b></p>`).join('')}
       ${d.by.length ? `<p class="rc-sub">Where it went</p>${d.by.map((p) => `<p class="rc-kv"><span>${esc(p.name)}</span><b>${fmt(p.n)}</b></p>`).join('')}` : ''}
-      <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="reset"${dis()}>Start a new event</button></div></div>`);
+      <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="newEvent"${dis()}>Start a new event</button></div></div>`);
   }
 
   function feedRow(entry) {
     const text = String(entry.text || '').trim();
-    if (!text || RAW_LOG.test(text)) return '';
+    if (!text || RAW_LOG.test(text) || TEXTING.test(text) || /^Updated the event\b/.test(text)) return ''; // event edits already show in the chat
     const who = sender(entry);
     if (who.me) return `<div class="rc-row rc-me"><div class="rc-col"><div class="rc-who">You<time>${esc(clock(entry.at))}</time></div><div class="rc-bub me">${esc(text)}</div></div></div>`;
     return `<div class="rc-row">${avatarHtml(who)}<div class="rc-col"><div class="rc-who">${esc(who.name)}<time>${esc(clock(entry.at))}</time></div>${bubble(esc(text))}</div></div>`;
@@ -348,7 +386,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       const busyIds = new Set(offers().filter((o) => ['offered', 'accepted', 'picked_up'].includes(o.status)).map((o) => o.volunteerId));
       const free = volunteers().filter((v) => v.optedIn !== false && !busyIds.has(v.id));
       return `<b>${free.length} free right now</b>` + volunteers().map((v) => {
-        const o = offers().filter((x) => x.volunteerId === v.id && x.status !== 'proposed').pop();
+        const o = latestOffer(v.id);
         return `<div class="rc-li">${avatarHtml({ name: v.name, vol: v })}<span>${esc(v.name)}</span><span class="rc-stt ${o ? esc(o.status) : ''}">${chipFor(o, v)}</span></div>`;
       }).join('');
     }
@@ -363,21 +401,29 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const visible = STAGES.slice(0, STAGES.indexOf(cur) + 1);
     for (const st of visible) if (!ui.stageAt[st]) ui.stageAt[st] = Date.now();
     const blocks = {};
-    if (!event()) {
-      blocks.event = hqRow(bubble('Hi, I am HQ. Add the event and what food was ordered, and I will help you rescue what is left.') + eventCard());
+    if (!event() || ui.newEvent) {
+      if (!ui.stepByStep) return hqRow(bubble('Hi, I am HQ. Tell me what food is left and where. I will find places and call volunteers.') + quickCard());
+      return hqRow(bubble('Add the event and what food was ordered, and I will help you rescue what is left.') + eventCard());
+    }
+    const quick = ui.quick && ui.quick.eventId === event().id;
+    if (quick) {
+      // Fast path: the server already did the event, count, match and offers. Skip those screens.
+      blocks.event = (ui.quick.said ? meRow(ui.quick.said) : '') + hqRow(bubble(esc(ui.quick.summary)));
+      if (visible.includes('photo') || visible.includes('match')) blocks.photo = '';
+      if (cur === 'match') blocks.match = placesCard();
     } else {
       blocks.event = hqRow(bubble('Event saved.') + eventSummary());
-      blocks.details = hqRow(bubble('A few quick questions.')) + detailsBlock(STAGES.indexOf(cur) > 1);
+      blocks.details = detailsBlock(STAGES.indexOf(cur) > 1);
       if (visible.includes('photo')) blocks.photo = photoCard();
       if (visible.includes('match')) blocks.match = placesCard();
-      if (visible.includes('outreach')) blocks.outreach = outreachCard();
-      if (visible.includes('done')) blocks.done = summaryCard();
     }
-    if (report() && blocks.photo) {
+    if (visible.includes('outreach')) blocks.outreach = outreachCard();
+    if (visible.includes('done')) blocks.done = summaryCard();
+    if (report() && (blocks.photo || quick)) {
       const inc = incident();
       const qty = sum(report().items, (i) => i.left);
       const names = report().items.filter((i) => num(i.left) > 0).map((i) => `${fmt(i.left)} ${esc(i.item)}`).join(', ') || fmt(qty);
-      blocks.photo += `<div class="rc-sys">Rescue started · ${names} at ${esc(event().venue)}${inc?.deadline ? ` · safe until ${esc(clock(inc.deadline))}` : ''}</div>`;
+      blocks[quick ? 'event' : 'photo'] += `<div class="rc-sys">Rescue started · ${names} at ${esc(event().venue)}${inc?.deadline ? ` · safe until ${esc(clock(inc.deadline))}` : ''}</div>`;
     }
     const keys = visible.filter((k) => blocks[k]);
     const place = (at) => { let hit = keys[0]; for (const k of keys) if ((ui.stageAt[k] || 0) <= at + 300) hit = k; return hit; };
@@ -387,38 +433,109 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     for (const ask of asks) {
       pushExtra(ask.at, meRow(ask.kind === 'free' ? 'Who’s free?' : 'What’s left?') + hqRow(ask.kind === 'free' ? `<div class="rc-bub rc-rich">${answer('free')}</div>` : bubble(answer(ask.kind))));
     }
-    return keys.map((k) => blocks[k] + (extras[k] || []).sort((a, b) => a.at - b.at).map((x) => x.html).join('')).join('');
+    // During the questions, HQ notes go above the chat so the current question stays at the bottom.
+    const extraHtml = (k) => (extras[k] || []).sort((a, b) => a.at - b.at).map((x) => x.html).join('');
+    return keys.map((k) => (k === 'details' ? extraHtml(k) + blocks[k] : blocks[k] + extraHtml(k))).join('');
   }
 
+  const typing = (el) => el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
   function renderThread() {
     const thread = slot('thread');
     const html = buildThread();
     if (html === threadHtml) return;
     const el = document.activeElement;
-    if (el && thread.contains(el) && /^(INPUT|TEXTAREA)$/.test(el.tagName)) { deferred = true; return; } // do not steal focus while typing
-    deferred = false;
+    if (thread.contains(el) && typing(el)) { deferred = true; return; } // do not steal focus while typing
     const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 160;
     const keep = thread.scrollTop;
     threadHtml = html;
     thread.innerHTML = html;
     thread.scrollTop = nearBottom || !lastSuccess ? thread.scrollHeight : keep;
   }
+  // Replace a region only when it changed, and never while someone is typing in it.
+  const lastHtml = new Map();
+  function setHtml(el, html) {
+    if (lastHtml.get(el) === html) return;
+    if (el.contains(document.activeElement) && typing(document.activeElement)) { deferred = true; return; }
+    lastHtml.set(el, html);
+    el.innerHTML = html;
+  }
 
+  const inDetails = () => Boolean(state && event() && stage() === 'details' && !ui.agentDone);
   function renderQuick() {
-    const e = event();
     const cur = state ? stage() : 'event';
     let chips = '';
-    if (!e) chips = `<button type="button" class="rc-btn" data-act="sample"${dis()}>Sample event</button>`;
-    else if (cur === 'details') {
-      const q = currentQ();
-      if (q?.key === 'minutes') chips = q.opts.map((m) => `<button type="button" class="rc-btn" data-act="qa" data-v="${m}"${dis()}>${m} minutes</button>`).join('');
-    } else {
-      chips = `<button type="button" class="rc-btn" data-ask="left">What’s left?</button><button type="button" class="rc-btn" data-ask="free">Who’s free?</button>` +
-        `<button type="button" class="rc-btn" data-act="ff"${dis()}${isActiveInc() ? '' : ' disabled'}>Fast-forward</button>`;
+    if (inDetails()) {
+      chips = (agentBusy ? [] : ui.chips).map((c) => `<button type="button" class="rc-btn" data-act="chip" data-v="${esc(c)}">${esc(c)}</button>`).join('');
+    } else if (event() && cur !== 'event') {
+      chips = '<button type="button" class="rc-btn" data-ask="left">What’s left?</button><button type="button" class="rc-btn" data-ask="free">Who’s free?</button>';
     }
-    slot('quick').innerHTML = chips;
-    const q = e && cur === 'details' ? currentQ() : null;
-    input.placeholder = q ? (q.key === 'pickup' ? 'Type a pickup location' : q.key === 'contact' ? 'Type a contact name' : 'Type the number of minutes') : 'Post an update to the team';
+    setHtml(slot('quick'), chips);
+    slot('quick').hidden = !chips;
+    input.placeholder = inDetails() ? 'Answer HQ' : event() ? 'Post an update to the team' : 'Add the event above to begin';
+  }
+
+  // ---- team and places ----------------------------------------------------
+  const fld = (form, key, label, value, attrs = '') => `<label class="rc-fld"><span>${label}</span><input data-f="form" data-form="${form}" data-k="${key}" value="${esc(value)}" ${attrs}></label>`;
+  function volForm(form, v) {
+    const f = forms[form];
+    const editing = form === 'volEdit';
+    const phoneHint = editing && phoneSet(v) ? `<p class="rc-hint">Ends in ${esc(phoneLast4(v))}. Type a new number to change it.</p>` : editing ? '' : '<p class="rc-hint">Phone is optional. You can add it later.</p>';
+    return `<div class="rc-vol rc-form">${editing ? `<b>Edit ${esc(v.name)}</b>` : '<b>Add a volunteer</b>'}
+      ${fld(form, 'name', 'Name', f.name, 'autocomplete="off" placeholder="First and last name"')}
+      ${fld(form, 'phone', 'Phone number', f.phone, 'type="tel" autocomplete="off" inputmode="tel" placeholder="762 235 7374"')}${phoneHint}
+      ${editing ? `<label class="rc-check"><input type="checkbox" data-f="form" data-form="volEdit" data-k="optedIn"${f.optedIn ? ' checked' : ''}> Can be asked to pick up food</label>` : ''}
+      <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="${editing ? 'volSave' : 'volAdd'}"${dis()}>${editing ? 'Save' : 'Add volunteer'}</button>
+      ${editing ? '<button type="button" class="rc-btn rc-sm" data-act="volCancel">Cancel</button>' : ''}</div></div>`;
+  }
+  function teamPanel() {
+    const rows = volunteers().map((v) => {
+      if (forms.volEdit?.id === v.id) return volForm('volEdit', v);
+      const confirming = forms.confirm === `v:${v.id}`;
+      const actions = confirming
+        ? `<p class="rc-line">Remove ${esc(v.name)} from the team?</p><div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="volRmYes" data-id="${esc(v.id)}"${dis()}>Yes, remove</button><button type="button" class="rc-btn rc-sm" data-act="rmNo">Keep</button></div>`
+        : `<div class="rc-actions"><button type="button" class="rc-btn rc-sm" data-act="volEdit" data-id="${esc(v.id)}">Edit</button><button type="button" class="rc-btn rc-sm" data-act="volRm" data-id="${esc(v.id)}">Remove</button></div>`;
+      return `<div class="rc-vol"><div class="rc-volhead">${avatarHtml({ name: v.name, vol: v })}<div class="rc-grow"><b>${esc(v.name)}</b>
+        <p class="rc-line">${esc(phoneText(v))}</p>${v.optedIn === false ? '<p class="rc-line">Not taking asks</p>' : ''}</div></div>${actions}</div>`;
+    }).join('') || '<p class="rc-line">No volunteers yet. Add the first one below.</p>';
+    return rows + volForm('vol');
+  }
+  function placeForm(form, p) {
+    const f = forms[form];
+    const editing = form === 'placeEdit';
+    const types = PLACE_TYPES.map((t) => `<option value="${t}"${f.type === t ? ' selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('');
+    const checks = ACCEPTS.map(([k, label]) => `<label class="rc-check"><input type="checkbox" data-f="form" data-form="${form}" data-k="accepts" data-v="${k}"${f.accepts.includes(k) ? ' checked' : ''}> ${label}</label>`).join('');
+    return `<div class="rc-vol rc-form">${editing ? `<b>Edit ${esc(p.name)}</b>` : '<b>Add a place</b>'}
+      ${fld(form, 'name', 'Name', f.name, 'autocomplete="off" placeholder="Partner shelter C"')}
+      <label class="rc-fld"><span>Type</span><select data-f="form" data-form="${form}" data-k="type">${types}</select></label>
+      <div class="rc-itemrow">${fld(form, 'distanceMiles', 'Distance (miles)', f.distanceMiles, 'type="number" min="0" step="0.1" inputmode="decimal" placeholder="3"')}
+      ${fld(form, 'capacity', 'Capacity (portions)', f.capacity, 'type="number" min="1" step="1" inputmode="numeric" placeholder="120"')}</div>
+      ${fld(form, 'address', 'Address (optional)', f.address, 'autocomplete="off" placeholder="12 Main St"')}
+      <fieldset class="rc-checks"><legend>Accepts</legend>${checks}</fieldset>
+      <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="${editing ? 'placeSave' : 'placeAdd'}"${dis()}>${editing ? 'Save' : 'Add place'}</button>
+      ${editing ? '<button type="button" class="rc-btn rc-sm" data-act="placeCancel">Cancel</button>' : ''}</div></div>`;
+  }
+  const acceptsText = (p) => (p.accepts || []).map((a) => (ACCEPTS.find(([k]) => k === a)?.[1] || a).toLowerCase()).join(', ') || 'nothing set';
+  function placesPanel() {
+    const rows = places().map((p) => {
+      if (forms.placeEdit?.id === p.id) return placeForm('placeEdit', p);
+      const confirming = forms.confirm === `p:${p.id}`;
+      const actions = confirming
+        ? `<p class="rc-line">Remove ${esc(p.name)}?</p><div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="placeRmYes" data-id="${esc(p.id)}"${dis()}>Yes, remove</button><button type="button" class="rc-btn rc-sm" data-act="rmNo">Keep</button></div>`
+        : `<div class="rc-actions"><button type="button" class="rc-btn rc-sm" data-act="placeEdit" data-id="${esc(p.id)}">Edit</button><button type="button" class="rc-btn rc-sm" data-act="placeRm" data-id="${esc(p.id)}">Remove</button></div>`;
+      return `<div class="rc-vol"><b>${esc(p.name)}</b>
+        <p class="rc-kv"><span>Type</span><b>${esc(p.type || '')}</b></p>
+        <p class="rc-kv"><span>Distance</span><b>${esc(p.distanceMiles ?? '')} mi</b></p>
+        <p class="rc-kv"><span>Capacity</span><b>${fmt(p.capacity)} portions</b></p>
+        <p class="rc-kv"><span>Accepts</span><b>${esc(acceptsText(p))}</b></p>
+        ${p.address ? `<p class="rc-kv"><span>Address</span><b>${esc(p.address)}</b></p>` : ''}${actions}</div>`;
+    }).join('') || '<p class="rc-line">No places yet. Add the first one below.</p>';
+    return rows + placeForm('place');
+  }
+  function panelHtml(withHead) {
+    const tab = (v, label) => `<button type="button" class="rc-tab" role="tab" aria-selected="${view === v}" data-act="view" data-v="${v}">${label}</button>`;
+    const head = withHead ? `<div class="rc-sheet-head"><h2>${view === 'team' ? 'Team' : 'Places'}</h2><button type="button" class="rc-btn" data-act="close">Close</button></div>` : '';
+    const msg = forms.msg ? `<p class="${forms.ok ? 'rc-ok' : 'rc-warn'}" role="status">${esc(forms.msg)}</p>` : '';
+    return `<div class="rc-panel">${head}<div class="rc-tabs" role="tablist">${tab('team', 'Team')}${tab('places', 'Places')}</div>${msg}${view === 'team' ? teamPanel() : placesPanel()}</div>`;
   }
 
   function statusHtml(withTeam) {
@@ -434,8 +551,8 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const total = Math.max(1, r.left);
     const seg = (n, color) => `<i style="flex:${n};background:${color}"></i>`;
     const bar = report() ? `<div class="rc-segs" role="img" aria-label="${fmt(r.rescued)} dropped off, ${fmt(r.onWay)} on the way, ${fmt(r.need)} need a home">${seg(r.rescued, 'var(--green)')}${seg(r.onWay, 'var(--purple)')}${seg(r.need, 'var(--orange)')}</div>` : `<div class="rc-segs" aria-hidden="true">${seg(total, 'var(--track)')}</div>`;
-    const team = withTeam ? `<p class="rc-label">Team</p><ul class="rc-people">${volunteers().map((v) => {
-      const o = offers().filter((x) => x.volunteerId === v.id && x.status !== 'proposed').pop();
+    const team = withTeam ? `<div class="rc-labelrow"><p class="rc-label">Team</p><button type="button" class="rc-btn rc-sm" data-act="view" data-v="team">Manage team</button></div><ul class="rc-people">${volunteers().map((v) => {
+      const o = latestOffer(v.id);
       return `<li>${avatarHtml({ name: v.name, vol: v })}<b>${esc(v.name)}</b><span class="rc-stt">${chipFor(o, v)}</span></li>`;
     }).join('')}</ul>` : '';
     const inc = incident();
@@ -444,36 +561,49 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const dot = (c) => `<i style="background:${c}"></i>`;
     return `<div class="rc-card"><div class="rc-ringbox">${ring(150, 16)}<span class="rc-ring-mid"><b data-t="timer">${timerText()}</b><small>${sub}</small></span></div>
       <h3>${title}</h3>${venue}<p class="rc-lead">${lead}</p>${bar}</div>
-      <div class="rc-legend"><div><b>${fmt(r.rescued)}</b><span>${dot('var(--green)')}Rescued</span></div><div><b>${fmt(r.onWay)}</b><span>${dot('var(--purple)')}On the way</span></div><div><b>${fmt(r.need)}</b><span>${dot('var(--orange)')}Unclaimed</span></div></div>${team}<div class="rc-demo rc-demo-row"><span>Demo</span><button type="button" class="rc-btn rc-sm" data-act="sample">Create sample</button><button type="button" class="rc-btn rc-sm" data-act="ff">Fast-forward</button><button type="button" class="rc-btn rc-sm" data-act="reset">Reset</button></div>`;
+      <div class="rc-legend"><div><b>${fmt(r.rescued)}</b><span>${dot('var(--green)')}Rescued</span></div><div><b>${fmt(r.onWay)}</b><span>${dot('var(--purple)')}On the way</span></div><div><b>${fmt(r.need)}</b><span>${dot('var(--orange)')}Unclaimed</span></div></div>${team}`;
   }
 
   function render() {
     if (disposed) return;
     app.setAttribute('aria-busy', state ? 'false' : 'true');
     const e = event();
-    if ((e?.id || null) !== ui.eventId) {
-      const first = ui.eventId === null && e && !ui.confirmed && !Object.keys(ui.qa).length;
+    if (state && (e?.id || null) !== ui.eventId) {
+      const first = ui.eventId === null && e && !ui.chat.length && !ui.agentDone;
       ui.eventId = e?.id || null;
-      if (!first || !e) { ui.qa = {}; ui.confirmed = false; ui.mode = 'photo'; ui.manual = {}; ui.est = null; ui.estMessage = ''; ui.stageAt = {}; ui.offerEdits = {}; photos = []; asks = []; }
+      if (!first || !e) { const keep = ui.draft; ui = { ...freshUi(), eventId: ui.eventId, draft: keep }; photos = []; asks = []; agentError = ''; explain = { key: '', text: '', loading: false }; }
       saveUi();
     }
     slot('chan-title').textContent = e ? e.name : 'No event yet';
     slot('chan-sub').textContent = e ? `${e.venue}${e.date ? ` · ${niceDate(e.date)}` : ''}` : 'Add one to begin';
-    slot('team-side').innerHTML = volunteers().map((v) => {
-      const o = offers().filter((x) => x.volunteerId === v.id && x.status !== 'proposed').pop();
-      return `<li>${avatarHtml({ name: v.name, vol: v })}<span>${esc(v.name)}</span><span class="rc-stt">${chipFor(o, v)}</span></li>`;
-    }).join('');
+    setHtml(slot('team-side'), volunteers().map((v) => `<li>${avatarHtml({ name: v.name, vol: v })}<span>${esc(v.name)}</span><span class="rc-stt">${chipFor(latestOffer(v.id), v)}</span></li>`).join(''));
+    setHtml(slot('places-side'), places().map((p) => `<li><span>${esc(p.name)}</span><span class="rc-stt">${esc(p.distanceMiles ?? '')} mi</span></li>`).join(''));
     const r = remaining();
-    slot('pin-sub').textContent = !e ? 'No event yet' : !report() ? e.name : `${fmt(r.need)} unclaimed · ${fmt(r.rescued)} rescued`;
-    slot('status-desk').innerHTML = statusHtml(false);
-    slot('status-sheet').innerHTML = statusHtml(true);
+    slot('pin-sub').textContent = !e ? 'No event yet' : ui.newEvent ? 'Ready for the next rescue' : !report() ? e.name : `${fmt(r.need)} unclaimed · ${fmt(r.rescued)} rescued`;
+    const panel = view === 'team' || view === 'places';
+    setHtml(slot('status-desk'), panel ? panelHtml(true) : statusHtml(false));
+    setHtml(slot('status-sheet'), panel ? panelHtml(false) : statusHtml(true));
+    slot('sheet-title').textContent = view === 'team' ? 'Team' : view === 'places' ? 'Places' : 'Rescue status';
+    sheet.hidden = !view;
+    scrim.hidden = !view;
+    pin.setAttribute('aria-expanded', String(view === 'status'));
     slot('demo').hidden = !demoOpen;
     root.querySelector('[data-act="demo"]').setAttribute('aria-expanded', String(demoOpen));
     root.querySelector('[data-act="ff"]').disabled = !isActiveInc() || busy;
-    root.querySelector('.rc-composer button').disabled = busy || !state;
+    root.querySelector('.rc-composer button').disabled = busy || agentBusy || !state;
+    slot('composer').hidden = Boolean(state) && stage() === 'event';
     renderThread();
     renderQuick();
     tick();
+    if (state) setTimeout(followUps, 0);
+  }
+
+  // Work that starts on its own: the first agent question, and the match explanation.
+  function followUps() {
+    if (disposed || !state || busy) return;
+    const cur = stage();
+    if (cur === 'details' && !ui.chat.length && !agentBusy && !agentError) agentSend('');
+    if (cur === 'match' && proposed().length && explain.key !== explainKey() && !explain.loading) loadExplain();
   }
 
   function tick() {
@@ -488,8 +618,8 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     root.querySelectorAll('[data-t="timer"]').forEach((el) => { el.textContent = text; });
     root.querySelectorAll('[data-t="ring"]').forEach((el) => el.setAttribute('stroke-dashoffset', (RING_C * (1 - Math.min(1, fraction))).toFixed(2)));
     const recent = lastSuccess && Date.now() - lastSuccess < 10000;
-    slot('live').textContent = mock ? 'Demo' : streamConnected ? 'Live' : recent ? 'Connected' : lastSuccess ? 'Reconnecting' : 'Connecting to HQ';
-    root.querySelector('.rc-live').classList.toggle('on', Boolean(mock || streamConnected || recent));
+    slot('live').textContent = streamConnected ? 'Live' : recent ? 'Connected' : lastSuccess ? 'Reconnecting' : 'Connecting to HQ';
+    root.querySelector('.rc-live').classList.toggle('on', Boolean(streamConnected || recent));
   }
 
   function showError(message) {
@@ -508,35 +638,28 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
 
   // ---- network ------------------------------------------------------------
   async function call(method, path, body) {
-    if (mock) {
-      const res = mock.handle(method, path, body);
-      return { ok: res.status < 400, status: res.status, data: res.json };
-    }
+    const slow = path === '/api/estimate' ? 45000 : path.startsWith('/api/agent/') || path.endsWith('/call') ? 30000 : 12000;
     const res = await fetch(apiBase + path, {
       method,
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: method === 'GET' ? undefined : JSON.stringify(body || {}),
-      signal: AbortSignal.any([AbortSignal.timeout(method === 'POST' && path === '/api/estimate' ? 45000 : 12000), lifecycle.signal]),
+      signal: AbortSignal.any([AbortSignal.timeout(slow), lifecycle.signal]),
     });
     let data = null;
     try { data = await res.json(); } catch { /* non-JSON body */ }
-    const missing = res.status === 404 && (!data || data.error === 'Endpoint not found.');
-    if (missing && state) { // mock: the backend does not have this endpoint yet
-      mock = createMock(state);
-      const out = mock.handle(method, path, body);
-      return { ok: out.status < 400, status: out.status, data: out.json };
-    }
-    return { ok: res.ok, status: res.status, data };
+    return { ok: res.ok, status: res.status, data, missing: res.status === 404 && (!data || data.error === MISSING) };
   }
+  const netMessage = (error) => (error.name === 'TimeoutError' || error instanceof TypeError ? 'Could not reach HQ. Check your connection and try again.' : error.message);
+  const failMessage = (res, missingText) => (res.missing ? missingText : typeof res.data?.error === 'string' ? res.data.error : `That did not work (${res.status}). Please try again.`);
 
   async function readState() {
-    if (readPending || busy || disposed || mock) return;
+    if (readPending || busy || disposed) return;
     readPending = true;
     const start = revision;
     try {
       const res = await call('GET', '/api/state');
       if (!res.ok) throw new Error(`Could not load HQ updates (${res.status}).`);
-      if (start === revision && !busy && !mock) applyState(res.data);
+      if (start === revision && !busy) applyState(res.data);
       lastSuccess = Date.now();
       showError('');
     } catch (error) {
@@ -547,31 +670,72 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     }
   }
 
-  // Runs an action against the API. Returns {ok, data}. Errors become plain-language messages.
-  async function act(method, path, body, { quiet } = {}) {
-    if (busy || disposed) return { ok: false };
+  // Runs an action against the API. Returns {ok, data, message}. Errors become plain-language messages.
+  async function act(method, path, body, { quiet, missing = 'HQ cannot do that yet. Please try again later.' } = {}) {
+    if (busy || disposed) return { ok: false, message: 'HQ is still working on the last step. Try again in a moment.' };
     busy = true;
     revision++;
     render();
-    showError('');
+    if (!quiet) showError('');
     try {
       const res = await call(method, path, body);
       if (!res.ok) {
-        const msg = res.status === 404 ? 'HQ cannot do that yet. Please try again later.' : (typeof res.data?.error === 'string' ? res.data.error : `That did not work (${res.status}). Please try again.`);
+        const msg = failMessage(res, missing);
         if (!quiet) showError(msg);
         return { ok: false, data: res.data, message: msg };
       }
       busy = false;
       if (res.data && Array.isArray(res.data.volunteers)) applyState(res.data);
+      else if (res.data?.snapshot && Array.isArray(res.data.snapshot.volunteers)) applyState(res.data.snapshot);
+      else setTimeout(readState, 0);
       return { ok: true, data: res.data };
     } catch (error) {
-      const msg = error.name === 'TimeoutError' || error instanceof TypeError ? 'Could not reach HQ. Check your connection and try again.' : error.message;
+      const msg = netMessage(error);
       if (!quiet) showError(msg);
       return { ok: false, message: msg };
     } finally {
       busy = false;
       if (!disposed) render();
     }
+  }
+
+  // ---- agent --------------------------------------------------------------
+  async function agentSend(message) {
+    if (agentBusy || disposed || !event()) return;
+    const text = String(message || '').trim();
+    const history = ui.chat.map((m) => ({ role: m.role, text: m.text }));
+    if (text) ui.chat.push({ role: 'user', text });
+    agentBusy = true; agentError = ''; ui.chips = [];
+    render();
+    try {
+      const res = await call('POST', '/api/agent/message', { message: text, history });
+      if (!res.ok) throw new Error(failMessage(res, 'The HQ assistant is not available on this server yet. Count the food by hand or try again later.'));
+      const d = res.data || {};
+      if (d.reply) ui.chat.push({ role: 'assistant', text: String(d.reply) });
+      ui.chips = Array.isArray(d.chips) ? d.chips.map(String).filter(Boolean).slice(0, 4) : [];
+      if (d.snapshot && Array.isArray(d.snapshot.volunteers)) { state = { ...state, ...d.snapshot }; revision++; }
+      if (d.done === true) { ui.agentDone = true; ui.chips = []; }
+    } catch (error) {
+      if (text && ui.chat[ui.chat.length - 1]?.text === text) { ui.chat.pop(); if (!input.value) input.value = text; }
+      agentError = error.message && !(error instanceof TypeError) && error.name !== 'TimeoutError' ? error.message : 'Could not reach the HQ assistant. Check your connection and try again.';
+    } finally {
+      agentBusy = false;
+      saveUi();
+      render();
+    }
+  }
+
+  async function loadExplain() {
+    const key = explainKey();
+    explain = { key, text: '', loading: true };
+    render();
+    let text;
+    try {
+      const res = await call('POST', '/api/agent/explain', {});
+      text = res.ok && res.data?.reply ? String(res.data.reply) : res.missing ? 'An explanation is not available on this server yet.' : (res.data?.error || 'I could not explain these matches right now.');
+    } catch { text = 'I could not explain these matches right now.'; }
+    if (explain.key === key) explain = { key, text, loading: false };
+    render();
   }
 
   // ---- actions ------------------------------------------------------------
@@ -582,22 +746,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     if (!items.length || items.some((i) => i.ordered < 1)) { ui.formError = 'Add at least one food item with a quantity.'; return render(); }
     ui.formError = '';
     const r = await act('POST', '/api/event', { name: String(payload.name).trim(), venue: String(payload.venue).trim(), date: payload.date, items });
-    if (r.ok) { ui = { ...freshUi(), eventId: ui.eventId }; ui.stageAt = {}; photos = []; asks = []; saveUi(); render(); }
-  }
-  async function answerQ(value) {
-    const q = currentQ();
-    if (!q) return;
-    let v = String(value).trim();
-    if (q.key === 'minutes') {
-      const n = parseInt(v, 10);
-      if (!n || n < 5 || n > 600) { showError('Tell me how many minutes, for example 45.'); return; }
-      v = String(n);
-    }
-    ui.qa[q.key] = v;
-    saveUi();
-    const patch = q.key === 'minutes' ? { goodForMinutes: Number(v) } : q.key === 'pickup' ? { notes: `Pickup: ${v}` } : { contact: v };
-    render();
-    await act('PATCH', '/api/event', patch);
+    if (r.ok) { ui = { ...freshUi(), eventId: event()?.id || null }; photos = []; asks = []; agentError = ''; saveUi(); render(); }
   }
   async function useList(rows, source) {
     const r = await act('POST', '/api/report', { items: rows.map((x) => ({ item: x.item, left: x.left, unit: x.unit || 'portions', source, ...(x.confidence ? { confidence: x.confidence } : {}) })) });
@@ -618,16 +767,16 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     ui.estMessage = '';
     render();
     let res;
-    try { res = await call('POST', '/api/estimate', { images: photos, dataUrls: photos, items: event().items }); }
-    catch (error) { res = { ok: false, data: { failed: true } }; }
+    try { res = await call('POST', '/api/estimate', { images: photos, items: event().items }); }
+    catch { res = { ok: false, data: null }; }
     estimating = false;
     const d = res.data || {};
-    const failedText = 'I could not read the photos. Count what is left by hand instead.';
-    if (!res.ok || d.notConfigured || d.failed || d.unreadable || !Array.isArray(d.items) || !d.items.length) {
-      ui.estMessage = d.message || (res.status === 404 ? 'Photo estimates are not available yet. Count what is left by hand.' : d.notConfigured ? 'Photo estimates are not set up yet. Count what is left by hand.' : failedText);
+    if (!res.ok || d.unreadable || !Array.isArray(d.items) || !d.items.length) {
+      ui.estMessage = res.missing ? 'Photo estimates are not available on this server. Count what is left by hand.'
+        : (typeof d.error === 'string' && d.error) || d.message || 'I could not read the photos. Count what is left by hand instead.';
       ui.mode = 'manual';
     } else {
-      ui.est = d.items.map((i) => ({ item: i.item, count: num(i.count), unit: i.unit || 'portions', confidence: String(i.confidence || 'medium'), orig: num(i.count), edited: false }));
+      ui.est = d.items.map((i) => ({ item: i.item, count: num(i.count), unit: i.unit || 'portions', confidence: String(i.confidence || 'medium'), edited: false }));
       ui.estMessage = d.message || '';
     }
     saveUi();
@@ -664,20 +813,134 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     });
   }
 
+  async function quickStart() {
+    const text = ui.quickText.trim();
+    if (!text) { ui.quickError = 'Say or type what is left first.'; return render(); }
+    stopMic();
+    ui.quickError = '';
+    const r = await act('POST', '/api/quick', { text }, { quiet: true, missing: 'Quick start is not available on this server yet. Use “Set it up step by step” below.' });
+    if (!r.ok) { ui.quickError = r.message || 'That did not work. Please try again.'; saveUi(); return render(); }
+    const snap = r.data || state;
+    ui.quick = { eventId: snap?.event?.id || event()?.id || null, said: text, summary: quickSummary(r.data?.quick?.understood, snap) };
+    ui.agentDone = true; ui.newEvent = false; ui.stepByStep = false; ui.quickText = '';
+    saveUi();
+    render();
+    const thread = slot('thread');
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  function stopMic() { if (listening) { try { listening.stop(); } catch { /* already stopped */ } } }
+  function toggleMic() {
+    if (!Speech) return;
+    if (listening) { stopMic(); return; }
+    const rec = new Speech();
+    rec.lang = 'en-US';
+    rec.interimResults = true;
+    rec.continuous = false; // stops on its own after a pause
+    const before = ui.quickText.trim();
+    rec.onresult = (e) => {
+      let said = '';
+      for (let k = 0; k < e.results.length; k++) said += e.results[k][0].transcript;
+      ui.quickText = [before, said.trim()].filter(Boolean).join(' ');
+      const box = root.querySelector('[data-f="quick"]');
+      if (box) box.value = ui.quickText;
+      const start = root.querySelector('[data-act="quickStart"]');
+      if (start) start.disabled = busy || !ui.quickText.trim();
+    };
+    rec.onerror = (e) => {
+      ui.quickError = e.error === 'not-allowed' || e.error === 'service-not-allowed' ? 'The microphone is blocked. Allow it in your browser, or type what is left.'
+        : e.error === 'no-speech' ? 'I did not hear anything. Tap the mic and try again, or type it.' : 'The mic stopped. Type what is left instead.';
+    };
+    rec.onend = () => { listening = null; saveUi(); render(); };
+    try { rec.start(); listening = rec; ui.quickError = ''; } catch { listening = null; ui.quickError = 'The mic could not start. Type what is left instead.'; }
+    render();
+  }
+
   async function reset() {
     asks = [];
     const r = await act('POST', '/api/demo/reset', {});
-    if (r.ok) { ui = freshUi(); photos = []; threadHtml = ''; try { sessionStorage.removeItem('rc-ui'); } catch { /* ok */ } render(); }
+    if (r.ok) { ui = freshUi(); photos = []; threadHtml = ''; agentError = ''; forms = freshForms(); try { sessionStorage.removeItem('rc-ui'); } catch { /* ok */ } render(); }
   }
 
-  function setSheet(open) {
-    sheet.hidden = !open;
-    scrim.hidden = !open;
-    pin.setAttribute('aria-expanded', String(open));
+  // Team and places: messages show inside the panel, never as fake success.
+  const panelSay = (msg, ok) => {
+    forms.msg = msg; forms.ok = ok;
+    setTimeout(() => { // the panel can be long: bring the message into view
+      const el = Array.from(root.querySelectorAll('.rc-panel > [role="status"]')).find((x) => x.offsetParent !== null);
+      el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 30);
+  };
+  async function panelAct(method, path, body, missing, done) {
+    const r = await act(method, path, body, { quiet: true, missing });
+    if (r.ok) { panelSay(done, true); } else panelSay(r.message || 'That did not work. Please try again.', false);
+    render();
+    return r.ok;
+  }
+  async function saveVolunteer(editing) {
+    const f = editing ? forms.volEdit : forms.vol;
+    const name = String(f.name || '').trim();
+    if (!name) { panelSay('Add a name.', false); return render(); }
+    const body = { name };
+    if (String(f.phone || '').trim()) {
+      if (!phoneOk(f.phone)) { panelSay(PHONE_HELP, false); return render(); }
+      body.phone = String(f.phone).trim();
+    }
+    if (editing) {
+      body.optedIn = Boolean(f.optedIn);
+      const ok = await panelAct('PATCH', `/api/volunteers/${encodeURIComponent(f.id)}`, body, 'This server cannot edit volunteers yet.', `Saved ${name}.`);
+      if (ok) {
+        forms.volEdit = null;
+        if (forms.backToCall) { forms.backToCall = false; forms.msg = ''; view = null; } // straight back to the Call button
+        render();
+      }
+    } else {
+      const ok = await panelAct('POST', '/api/volunteers', body, 'This server cannot add volunteers yet.', `Added ${name} to the team.`);
+      if (ok) { forms.vol = { name: '', phone: '' }; render(); }
+    }
+  }
+  function placeBody(f) {
+    const name = String(f.name || '').trim();
+    const distanceMiles = Number(f.distanceMiles);
+    const capacity = Number(f.capacity);
+    if (!name) return 'Add a name for the place.';
+    if (!PLACE_TYPES.includes(f.type)) return 'Pick a type.';
+    if (String(f.distanceMiles).trim() === '' || !Number.isFinite(distanceMiles) || distanceMiles < 0) return 'Enter the distance in miles, for example 3.';
+    if (!Number.isInteger(capacity) || capacity < 1) return 'Enter how many portions the place can take, for example 120.';
+    if (!f.accepts.length) return 'Pick at least one kind of food the place accepts.';
+    const body = { name, type: f.type, distanceMiles, capacity, accepts: [...f.accepts] };
+    if (String(f.address || '').trim()) body.address = String(f.address).trim();
+    return body;
+  }
+  async function savePlace(editing) {
+    const f = editing ? forms.placeEdit : forms.place;
+    const body = placeBody(f);
+    if (typeof body === 'string') { panelSay(body, false); return render(); }
+    if (editing) {
+      const ok = await panelAct('PATCH', `/api/places/${encodeURIComponent(f.id)}`, body, 'This server cannot edit places yet.', `Saved ${body.name}.`);
+      if (ok) { forms.placeEdit = null; render(); }
+    } else {
+      const ok = await panelAct('POST', '/api/places', body, 'This server cannot add places yet.', `Added ${body.name}.`);
+      if (ok) { forms.place = blankPlace(); render(); }
+    }
+  }
+  function openView(next, editId) {
+    view = next;
+    forms.msg = '';
+    forms.confirm = null;
+    forms.backToCall = Boolean(editId);
+    if (next === 'team' && editId) {
+      const v = volOf(editId);
+      if (v) forms.volEdit = { id: v.id, name: v.name, phone: '', optedIn: v.optedIn !== false };
+    }
+    render();
+    if (editId) setTimeout(() => {
+      const target = Array.from(root.querySelectorAll('[data-form="volEdit"][data-k="phone"]')).find((el) => el.offsetParent !== null);
+      target?.focus();
+    }, 30);
   }
 
   // ---- events -------------------------------------------------------------
-  root.addEventListener('input', (ev) => {
+  const onField = (ev) => {
     const t = ev.target;
     const f = t.dataset?.f;
     if (!f) return;
@@ -687,10 +950,24 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     else if (f === 'manual') ui.manual[t.dataset.k] = t.value;
     else if (f === 'est' && ui.est) { const row = ui.est[i]; row[t.dataset.k] = t.value; row.edited = true; }
     else if (f === 'offer') ui.offerEdits[t.dataset.id] = t.value;
-    else if (f === 'phone') ui.phone[t.dataset.id] = t.value;
+    else if (f === 'quick') {
+      ui.quickText = t.value; ui.quickError = '';
+      const start = root.querySelector('[data-act="quickStart"]');
+      if (start) start.disabled = busy || !t.value.trim();
+    }
+    else if (f === 'form') {
+      const target = forms[t.dataset.form];
+      if (!target) return;
+      if (t.dataset.k === 'accepts') target.accepts = t.checked ? [...new Set([...target.accepts, t.dataset.v])] : target.accepts.filter((x) => x !== t.dataset.v);
+      else if (t.type === 'checkbox') target[t.dataset.k] = t.checked;
+      else target[t.dataset.k] = t.value;
+      return;
+    }
     saveUi();
-  }, { signal: lifecycle.signal });
-  root.addEventListener('focusout', () => { if (deferred) setTimeout(() => { if (!disposed && !(document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName))) render(); }, 50); }, { signal: lifecycle.signal });
+  };
+  root.addEventListener('input', onField, { signal: lifecycle.signal });
+  root.addEventListener('change', (ev) => { if (ev.target.type === 'checkbox' || ev.target.tagName === 'SELECT') onField(ev); }, { signal: lifecycle.signal });
+  root.addEventListener('focusout', () => { if (deferred) setTimeout(() => { if (!disposed && !typing(document.activeElement)) { deferred = false; render(); } }, 50); }, { signal: lifecycle.signal });
 
   root.addEventListener('click', async (ev) => {
     const button = ev.target.closest('[data-act], [data-ask]');
@@ -707,15 +984,23 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     }
     switch (a) {
       case 'demo': demoOpen = !demoOpen; render(); break;
-      case 'sample': demoOpen = false; await saveEvent(SAMPLE_EVENT()); break;
+      case 'sample': demoOpen = false; ui.draft = { ...SAMPLE_EVENT() }; await saveEvent(SAMPLE_EVENT()); break;
       case 'ff': demoOpen = false; await act('POST', '/api/demo/fast-forward', { minutes: 1 }); break;
       case 'reset': demoOpen = false; await reset(); break;
+      case 'view': if (button.dataset.v === view && view === 'status') view = null; else openView(button.dataset.v); render(); break;
+      case 'close': view = null; forms.volEdit = null; forms.placeEdit = null; forms.confirm = null; forms.msg = ''; render(); break;
       case 'addrow': ui.draft.items.push({ item: '', ordered: '' }); render(); break;
       case 'delrow': ui.draft.items.splice(i, 1); render(); break;
       case 'saveEvent': await saveEvent(ui.draft); break;
-      case 'qa': await answerQ(button.dataset.v ?? ''); break;
-      case 'qaReset': ui.qa = {}; saveUi(); render(); break;
-      case 'looksRight': ui.confirmed = true; saveUi(); render(); break;
+      case 'newEvent': ui.newEvent = true; ui.stepByStep = false; ui.draft = freshUi().draft; saveUi(); render(); break;
+      case 'mic': toggleMic(); break;
+      case 'quickStart': await quickStart(); break;
+      case 'stepByStep': stopMic(); ui.stepByStep = true; saveUi(); render(); break;
+      case 'quickPath': ui.stepByStep = false; saveUi(); render(); break;
+      case 'cancelNew': ui.newEvent = false; saveUi(); render(); break;
+      case 'chip': await agentSend(button.dataset.v || ''); break;
+      case 'agentRetry': agentError = ''; await agentSend(''); break;
+      case 'skipQs': ui.agentDone = true; ui.chips = []; saveUi(); render(); break;
       case 'takePhoto': slot('cam').click(); break;
       case 'pickPhoto': slot('gallery').click(); break;
       case 'rmPhoto': photos.splice(i, 1); render(); break;
@@ -725,7 +1010,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       case 'useManual': await useManual(); break;
       case 'useEst': await useEst(); break;
       case 'sendOffers': {
-        const edits = offers().filter((o) => o.status === 'proposed').map((o) => ({ id: o.id, portions: num(ui.offerEdits[o.id] ?? o.portions) }));
+        const edits = proposed().map((o) => ({ id: o.id, portions: num(ui.offerEdits[o.id] ?? o.portions) }));
         const r = await act('POST', '/api/offers/send', { offers: edits });
         if (r.ok) { ui.offerEdits = {}; saveUi(); }
         break;
@@ -734,36 +1019,42 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       case 'decline': await act('POST', `/api/offers/${encodeURIComponent(id)}/respond`, { action: 'decline' }); break;
       case 'pickup': await act('POST', `/api/offers/${encodeURIComponent(id)}/pickup`, {}); break;
       case 'dropoff': await act('POST', `/api/offers/${encodeURIComponent(id)}/dropoff`, {}); break;
-      case 'savePhone': {
-        const phone = String(ui.phone[id] || '').trim();
-        if (!/^\+?[0-9 ()-]{7,20}$/.test(phone)) { showError('Enter a phone number with the country code, for example +15551234567.'); break; }
-        const r = await act('POST', `/api/volunteers/${encodeURIComponent(id)}/phone`, { phone: phone.replace(/[^\d+]/g, '') });
-        if (r.ok) { ui.phone[id] = ''; ui.phoneSaved[id] = true; saveUi(); render(); }
-        break;
-      }
       case 'call': {
         const vid = button.dataset.vid;
-        ui.callNote = ui.callNote || {};
-        const r = await act('POST', `/api/offers/${encodeURIComponent(id)}/call`, {});
-        ui.callNote[vid] = r.ok ? (r.data?.message || 'Calling now.') : (r.message || 'The call did not go through.');
+        ui.callNote[vid] = { ok: true, text: `Calling ${firstName(volOf(vid)?.name)}…` };
+        const r = await act('POST', `/api/offers/${encodeURIComponent(id)}/call`, {}, { quiet: true, missing: 'Calling is not available on this server.' });
+        ui.callNote[vid] = r.ok ? { ok: true, text: r.data?.message || 'Calling now.' } : { ok: false, text: r.message || 'The call did not go through.' };
+        saveUi();
         render();
         break;
       }
+      case 'addPhone': openView('team', id); break;
+      case 'volAdd': await saveVolunteer(false); break;
+      case 'volEdit': { const v = volOf(id); if (v) { forms.volEdit = { id, name: v.name, phone: '', optedIn: v.optedIn !== false }; forms.confirm = null; forms.msg = ''; } render(); break; }
+      case 'volSave': await saveVolunteer(true); break;
+      case 'volCancel': forms.volEdit = null; forms.msg = ''; render(); break;
+      case 'volRm': forms.confirm = `v:${id}`; forms.msg = ''; render(); break;
+      case 'volRmYes': { const name = volOf(id)?.name || 'The volunteer'; const ok = await panelAct('DELETE', `/api/volunteers/${encodeURIComponent(id)}`, {}, 'This server cannot remove volunteers yet.', `${name} was removed from the team.`); if (ok) forms.confirm = null; render(); break; }
+      case 'placeAdd': await savePlace(false); break;
+      case 'placeEdit': { const p = places().find((x) => x.id === id); if (p) { forms.placeEdit = { id, name: p.name || '', type: PLACE_TYPES.includes(p.type) ? p.type : 'shelter', distanceMiles: p.distanceMiles ?? '', capacity: p.capacity ?? '', accepts: [...(p.accepts || [])], address: p.address || '' }; forms.confirm = null; forms.msg = ''; } render(); break; }
+      case 'placeSave': await savePlace(true); break;
+      case 'placeCancel': forms.placeEdit = null; forms.msg = ''; render(); break;
+      case 'placeRm': forms.confirm = `p:${id}`; forms.msg = ''; render(); break;
+      case 'placeRmYes': { const name = places().find((x) => x.id === id)?.name || 'The place'; const ok = await panelAct('DELETE', `/api/places/${encodeURIComponent(id)}`, {}, 'This server cannot remove places yet.', `${name} was removed.`); if (ok) forms.confirm = null; render(); break; }
+      case 'rmNo': forms.confirm = null; render(); break;
       case 'retry': showError(''); readState(); break;
-      case 'sheet': setSheet(sheet.hidden); break;
-      case 'close': setSheet(false); break;
       default: break;
     }
   }, { signal: lifecycle.signal });
-  root.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !sheet.hidden) setSheet(false); }, { signal: lifecycle.signal });
+  root.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && view) { view = null; render(); } }, { signal: lifecycle.signal });
   slot('cam').addEventListener('change', (ev) => { addPhotos(ev.target.files); ev.target.value = ''; }, { signal: lifecycle.signal });
   slot('gallery').addEventListener('change', (ev) => { addPhotos(ev.target.files); ev.target.value = ''; }, { signal: lifecycle.signal });
   slot('composer').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const text = input.value.trim();
     if (!text) { input.focus(); return; }
-    if (state && event() && stage() === 'details' && currentQ()) { input.value = ''; await answerQ(text); return; }
-    if (!event()) { showError('Add the event first, then you can post updates.'); return; }
+    if (!event() || ui.newEvent) { showError('Add the event first, then you can post updates.'); return; }
+    if (inDetails()) { input.value = ''; await agentSend(text); input.focus(); return; }
     const r = await act('POST', '/api/updates', { text });
     if (r.ok) { input.value = ''; const thread = slot('thread'); thread.scrollTop = thread.scrollHeight; }
   }, { signal: lifecycle.signal });
@@ -775,7 +1066,6 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     stream = new EventSource(apiBase + '/api/stream');
     stream.onopen = () => { streamConnected = true; tick(); };
     stream.onmessage = (ev) => {
-      if (mock) return;
       try { applyState(JSON.parse(ev.data)); showError(''); } catch { showError('A live update could not be read. Retrying.'); }
     };
     stream.onerror = () => { streamConnected = false; tick(); };
