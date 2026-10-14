@@ -131,7 +131,8 @@ app.get("/v/:id", (_req, res) => {
   res.type("html").send("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Food Rescue HQ</title><p style='font-family:sans-serif;padding:24px'>Volunteer page coming soon.</p>");
 });
 app.use("/api", (_req, res) => res.status(404).json({ error: "Endpoint not found." }));
-app.use(express.static(path.join(root, "public"), { etag: false, maxAge: 0 }));
+// no-store so Cloudflare and phones never keep an old copy of the app after a deploy
+app.use(express.static(path.join(root, "public"), { etag: false, setHeaders: (res) => res.set("Cache-Control", "no-store") }));
 app.use((err, _req, res, _next) => {
   if (err instanceof core.HttpError) return res.status(err.status).json({ error: err.message });
   if (err.status === 413) return res.status(413).json({ error: "That request is too large." });
