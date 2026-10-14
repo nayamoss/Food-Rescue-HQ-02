@@ -113,7 +113,7 @@ export function registerQuick(app, core, after) {
     const parsed = (await parseWithModel(text)) || parseQuick(text);
     if (!parsed.items.length) return res.status(400).json({ error: "I could not find any food and amounts. Try: 100 tacos and 10 sandwiches at the main hall." });
     const goodFor = parsed.goodForMinutes || 45;
-    // Preview: only say what was understood. Nothing is created; the user confirms with "Yes, alert nonprofits".
+    // Preview: only say what was understood. Nothing is created; the user confirms with "Yes, alert partners".
     if (req.body?.preview === true) return res.json({ quick: { understood: parsed, goodForMinutes: goodFor, preview: true } });
     try {
       const existing = core.snapshot().event;
@@ -125,7 +125,7 @@ export function registerQuick(app, core, after) {
           items: parsed.items.map((i) => ({ item: i.item, ordered: i.left })), notes: `Reported by voice: ${text.slice(0, 300)}` });
       }
       core.submitReport({ items: parsed.items.map((i) => ({ item: i.item, left: i.left, unit: i.unit, source: "manual" })) });
-      // Stage 1: call the nonprofits. Volunteers are only called once a place says yes.
+      // Stage 1: call the partners. Volunteers are only called once a place says yes.
       const snap = core.startPlaceOutreach({});
       res.json({ ...snap, quick: { understood: parsed, goodForMinutes: goodFor } });
       Promise.resolve().then(after).catch(() => {});

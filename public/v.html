@@ -35,12 +35,12 @@ function render() {
     const actions = o.status === 'offered'
       ? `<button type="button" class="rc-btn rc-big rc-accept" data-do="accept"${off}>Accept</button><button type="button" class="rc-link" data-do="decline"${off}>I can’t take it</button>`
       : ['accepted', 'picked_up'].includes(o.status)
-        ? `<p class="rc-line">Tap when the food is with ${esc(p?.name || 'the nonprofit')}.</p><button type="button" class="rc-btn rc-big rc-delivered" data-do="delivered"${off}>Delivered</button>` : '';
+        ? `<p class="rc-line">Tap when the food is with ${esc(p?.name || 'the partner')}.</p><button type="button" class="rc-btn rc-big rc-delivered" data-do="delivered"${off}>Delivered</button>` : '';
     const thanks = ['dropped_off', 'delivered'].includes(o.status) ? '<p>Thank you. That food has a home.</p>' : o.status === 'declined' ? '<p>No problem. HQ will ask someone else.</p>' : '';
     body = `<div class="rc-cardm"><span class="rc-dot ${tone}">${esc(word)}</span>
       <h3>${esc(o.portions)} ${esc(String(o.item || '').toLowerCase())}</h3>
       <p class="rc-kv"><span>Pick up from</span><b>${esc(e.venue || 'the event')}</b></p>
-      <p class="rc-kv"><span>Take to</span><b>${esc(p?.name || 'a nonprofit')}</b></p>
+      <p class="rc-kv"><span>Take to</span><b>${esc(p?.name || 'a partner')}</b></p>
       ${p?.address ? `<p class="rc-kv"><span>Address</span><b>${esc(p.address)}</b></p>` : ''}
       ${by ? `<p class="rc-kv"><span>Get it there by</span><b>${esc(by)}</b></p>` : ''}
       ${thanks}${actions}</div>`;

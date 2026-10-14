@@ -1,4 +1,4 @@
-// Food Rescue HQ (Pocket HQ). Four tabs: Rescue (camera and voice first thread), Events, Nonprofits, Volunteers.
+// Food Rescue HQ (Pocket HQ). Four tabs: Rescue (camera and voice first thread), Events, Partners, Volunteers.
 // Everything talks to the real server. When the server says no, or an endpoint is missing, we say so in plain words.
 
 const RING_R = 92;
@@ -13,7 +13,7 @@ const TEXTING = /^texted\b|\btext message|\bsms\b|reply yes/i;
 // Feed lines the thread already shows in its own words.
 const NOISE = /^(Added event|Updated the event|Confirmed what is left|Confirmed that nothing|Matched |Added volunteer|Added place|Removed volunteer|Removed place|Saved a phone|Updated volunteer|Updated place|Incident opened)/i;
 const MISSING = 'Endpoint not found.';
-// Per lot: Calling nonprofits, a nonprofit said yes, Calling a volunteer, On the way, Delivered.
+// Per lot: Calling partners, a partner said yes, Calling a volunteer, On the way, Delivered.
 const LOT_STAGES = ['calling_places', 'place_accepted', 'calling_volunteer', 'on_the_way', 'delivered', 'unclaimed'];
 
 const svg = (body, w = 2.2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -37,7 +37,7 @@ const icon = {
   back: svg('<path d="m15 18-6-6 6-6"/>', 2.4),
   stop: '<svg class="rc-stopico" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg>',
 };
-const NAV = [['rescue', 'Rescue', icon.bolt], ['events', 'Events', icon.cal], ['places', 'Nonprofits', icon.building], ['team', 'Volunteers', icon.people]];
+const NAV = [['rescue', 'Rescue', icon.bolt], ['events', 'Events', icon.cal], ['places', 'Partners', icon.building], ['team', 'Volunteers', icon.people]];
 
 const TEMPLATE = `
 <div class="rc" data-urg="idle" data-tab="rescue" aria-busy="true">
@@ -111,7 +111,7 @@ function niceDate(value) {
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
 const lower = (s) => String(s || '').toLowerCase();
-const NO_PHONE = 'No nonprofit has a phone number yet. Add one in Nonprofits to start.';
+const NO_PHONE = 'No partner has a phone number yet. Add one in Partners to start.';
 const foodLine = (items) => (items || []).filter((i) => num(i.left) > 0).map((i) => `${fmt(i.left)} ${lower(i.item)}`).join(', ');
 const listWords = (arr) => (arr.length <= 1 ? arr.join('') : `${arr.slice(0, -1).join(', ')} and ${arr[arr.length - 1]}`);
 const stepSize = (n) => (n >= 100 ? 10 : n >= 20 ? 5 : 1);
@@ -205,9 +205,9 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   let doneUntil = 0;
   let agentBusy = false;
   let evView = { mode: 'list', draft: null, editing: false, error: '' };
-  let pform = null; // nonprofit add/edit form
+  let pform = null; // partner add/edit form
   let vform = null; // volunteer add/edit form
-  let confirmRm = null; // 'p:id' | 'v:id' | 'all'
+  let confirmRm = null; // 'p:id' | 'v:id' | 'all' | 'lot:id' | 'rescue'
   let pageMsg = null; // { text, ok }
   let ui = freshUi();
   try { const saved = JSON.parse(sessionStorage.getItem('rc-ui2') || 'null'); if (saved) ui = { ...freshUi(), ...saved }; } catch { /* start fresh */ }
@@ -248,7 +248,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     return 'calling_places';
   }
   // Server lot status -> our stage names. "proposed" lots are not sent yet, so they are not outreach lots.
-  const LOT_STATUS = { calling_places: 'calling_places', waiting_volunteer: 'place_accepted', calling_volunteer: 'calling_volunteer', on_the_way: 'on_the_way', delivered: 'delivered', unclaimed: 'unclaimed' };
+  const LOT_STATUS = { calling_places: 'calling_places', waiting_volunteer: 'place_accepted', calling_volunteer: 'calling_volunteer', on_the_way: 'on_the_way', delivered: 'delivered', unclaimed: 'unclaimed', cancelled: 'unclaimed' };
   function lots() {
     const raw = Array.isArray(state?.lots) && state.lots.length ? state.lots : null;
     if (raw) {
@@ -274,7 +274,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     });
     return { rows, left: sum(rows, (r) => r.left), rescued: sum(rows, (r) => r.rescued), onWay: sum(rows, (r) => r.onWay), need: sum(rows, (r) => r.need) };
   }
-  // none: no event; count: waiting for what is left; ready: counted, nonprofits not alerted; outreach; done.
+  // none: no event; count: waiting for what is left; ready: counted, partners not alerted; outreach; done.
   function rescueStage() {
     if (!event()) return 'none';
     if (!report()) return 'count';
@@ -312,12 +312,12 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const s = secondsLeft();
     return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   }
-  // Nonprofits the server would call for this food (nearest first).
+  // Partners the server would call for this food (nearest first).
   const kindOf = (item) => (/water|juice|soda|drink|coffee|tea|milk|bottle|can\b/i.test(item) ? 'drinks' : /chip|bar|snack|packaged|cookie|candy|cracker/i.test(item) ? 'packaged' : 'prepared');
   const nearbyFor = (item) => places().filter((p) => !Array.isArray(p.accepts) || !p.accepts.length || p.accepts.includes(kindOf(item))).sort((a, b) => (a.distanceMiles ?? 0) - (b.distanceMiles ?? 0));
   function lotActivity(all) {
     const by = (s) => all.filter((l) => l.stage === s).length;
-    if (by('calling_places')) { const n = new Set(all.filter((l) => l.stage === 'calling_places').flatMap((l) => (l.calling && l.calling.length ? l.calling : l.places?.length ? [] : nearbyFor(l.item).map((p) => p.id)))).size; return `calling ${n || ''} nonprofit${n === 1 ? '' : 's'}`.replace('  ', ' '); }
+    if (by('calling_places')) { const n = new Set(all.filter((l) => l.stage === 'calling_places').flatMap((l) => (l.calling && l.calling.length ? l.calling : l.places?.length ? [] : nearbyFor(l.item).map((p) => p.id)))).size; return `calling ${n || ''} partner${n === 1 ? '' : 's'}`.replace('  ', ' '); }
     if (by('place_accepted') || by('calling_volunteer')) return 'calling a volunteer';
     if (by('on_the_way')) return 'on the way';
     return `${fmt(remaining().rescued)} delivered`;
@@ -326,7 +326,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   function shortActivity() {
     const all = lots();
     const has = (x) => all.some((l) => l.stage === x);
-    return has('calling_places') ? 'Calling nonprofits' : has('calling_volunteer') || has('place_accepted') ? 'Calling a volunteer' : has('on_the_way') ? 'On the way' : has('unclaimed') ? endReason().replace(/\.$/, '') : 'Wrapping up';
+    return has('calling_places') ? 'Calling partners' : has('calling_volunteer') || has('place_accepted') ? 'Calling a volunteer' : has('on_the_way') ? 'On the way' : has('unclaimed') ? endReason().replace(/\.$/, '') : 'Wrapping up';
   }
 
   // ---- shared bits -------------------------------------------------------
@@ -393,7 +393,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const can = foodLine(items) && !alerting && !noPhone;
     return hqRow(`<div class="rc-cardm rc-confirm"><p class="rc-sentence">${esc(sentence)}</p>${where}
       ${ui.count?.confidenceNote ? `<p class="rc-hint">${esc(ui.count.confidenceNote)}</p>` : ''}
-      <button type="button" class="rc-btn rc-primary rc-big" data-act="alert"${can && !busy ? '' : ' disabled'}>${alerting ? 'Alerting nonprofits' : 'Yes, alert nonprofits'}</button>
+      <button type="button" class="rc-btn rc-primary rc-big" data-act="alert"${can && !busy ? '' : ' disabled'}>${alerting ? 'Alerting partners' : 'Yes, alert partners'}</button>
       ${noPhone ? `<p class="rc-warn" role="status">${esc(NO_PHONE)} <button type="button" class="rc-link" data-act="tab" data-v="places">Add a phone</button></p>` : ''}
       ${fromReport ? '' : '<button type="button" class="rc-btn rc-big rc-soft" data-act="editAmounts">Edit amounts</button>'}</div>`);
   }
@@ -404,12 +404,18 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       const text = s.key === 'delivered' && s.state !== 'done' ? `${s.label} (the volunteer confirms)` : s.state === 'waiting' && s.key === 'volunteer' ? 'Waiting for a free volunteer' : s.label;
       const sub = s.key === 'places' && s.state === 'active' && l.places.length
         ? `<ul class="rc-subplaces">${l.places.map((p) => `<li><span>${esc(p.name)}</span>${dot(...(PLACE_WORD[p.status] || ['grey', p.status]))}</li>`).join('')}</ul>
-           ${l.placeDeadline ? `<p class="rc-hint">Nonprofits have until ${esc(clock(l.placeDeadline))} to answer. First yes gets it.</p>` : ''}` : '';
+           ${l.placeDeadline ? `<p class="rc-hint">Partners have until ${esc(clock(l.placeDeadline))} to answer. First yes gets it.</p>` : ''}` : '';
       return `<li class="${s.state === 'active' ? 'now' : s.state === 'todo' ? 'todo' : ''}">${dot(STEP_TONE[s.state] || 'grey', text)}${sub}</li>`;
     }).join('');
-    return `<div class="rc-lot"><div class="rc-lothead"><b>${fmt(l.portions)} ${esc(lower(l.item))}</b></div>
-      <p class="rc-lotlabel">${dot(LOT_TONE[l.stage] || 'purple', l.label)}</p><ol class="rc-track">${li}</ol></div>`;
+    return `<div class="rc-lot"><div class="rc-lothead"><b>${fmt(l.portions)} ${esc(lower(l.item))}</b>${lotCancel(l)}</div>
+      <p class="rc-lotlabel">${dot(LOT_TONE[l.stage] || 'purple', l.label)}</p><ol class="rc-track">${li}</ol>${lotCancelConfirm(l)}</div>`;
   }
+  // A lot can be cancelled by HQ while it is still open (not delivered, unclaimed or cancelled).
+  const lotOpen = (l) => l.stage !== 'delivered' && l.stage !== 'unclaimed';
+  const lotCancel = (l) => (lotOpen(l) && confirmRm !== `lot:${l.id}` ? `<button type="button" class="rc-link rc-sm" data-act="lotCancel" data-id="${esc(l.id)}">Cancel</button>` : '');
+  const lotCancelConfirm = (l) => (confirmRm === `lot:${l.id}`
+    ? `<p class="rc-line">Cancel ${fmt(l.portions)} ${esc(lower(l.item))}? Its calls stop and the volunteer is freed.</p><div class="rc-actions"><button type="button" class="rc-btn rc-danger rc-sm" data-act="lotCancelYes" data-id="${esc(l.id)}"${dis()}>Yes, cancel it</button><button type="button" class="rc-btn rc-soft rc-sm" data-act="rmNo">Keep it</button></div>`
+    : '');
   function lotTrack(l) {
     if (l.steps && l.steps.length) return serverLotTrack(l);
     const place = placeById(l.placeId);
@@ -418,29 +424,29 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const idx = { calling_places: 0, place_accepted: 2, calling_volunteer: 2, on_the_way: 3, delivered: 5 }[l.stage];
     const failAt = l.stage === 'unclaimed' ? (l.volunteerId ? 2 : l.placeId ? 2 : 0) : -1;
     const steps = [
-      ['Calling nonprofits', `Calling ${calling || ''} nonprofit${calling === 1 ? '' : 's'} nearby`.replace('  ', ' '), 'Called nonprofits'],
-      ['Waiting for a yes', 'Waiting for a yes', `${place?.name || 'A nonprofit'} said yes`],
+      ['Calling partners', `Calling ${calling || ''} partner${calling === 1 ? '' : 's'} nearby`.replace('  ', ' '), 'Called partners'],
+      ['Waiting for a yes', 'Waiting for a yes', `${place?.name || 'A partner'} said yes`],
       ['Calling a volunteer', vol ? `Calling ${firstName(vol.name)}` : 'Finding a volunteer', vol ? `${firstName(vol.name)} said yes` : 'A volunteer said yes'],
       ['On the way', vol ? `${firstName(vol.name)} is on the way` : 'On the way', 'Picked up'],
-      ['Delivered', 'Delivered', `Delivered to ${place?.name || 'the nonprofit'}`],
+      ['Delivered', 'Delivered', `Delivered to ${place?.name || 'the partner'}`],
     ];
     const li = steps.map(([todo, now, done], i) => {
       if (failAt >= 0) {
         if (i < failAt) return `<li>${dot('green', done)}</li>`;
-        if (i === failAt) return `<li>${dot('orange', i === 0 ? 'No nonprofit said yes in time' : 'No volunteer could take it')}</li>`;
+        if (i === failAt) return `<li>${dot('orange', i === 0 ? 'No partner said yes in time' : 'No volunteer could take it')}</li>`;
         return '';
       }
       if (i < idx) return `<li>${dot('green', done)}</li>`;
       if (i === idx) return `<li class="now">${dot('purple', now)}</li>`;
       return `<li class="todo">${dot('grey', i === 4 ? 'Delivered (the volunteer confirms)' : todo)}</li>`;
     }).join('');
-    const label = l.stage === 'delivered' ? ['green', 'Delivered'] : l.stage === 'unclaimed' ? ['orange', 'Unclaimed'] : ['purple', { calling_places: 'Calling nonprofits', place_accepted: 'Nonprofit said yes', calling_volunteer: 'Calling a volunteer', on_the_way: 'On the way' }[l.stage]];
-    return `<div class="rc-lot"><div class="rc-lothead"><b>${fmt(l.portions)} ${esc(lower(l.item))}</b>${dot(...label)}</div><ol class="rc-track">${li}</ol></div>`;
+    const label = l.stage === 'delivered' ? ['green', 'Delivered'] : l.stage === 'unclaimed' ? ['orange', 'Unclaimed'] : ['purple', { calling_places: 'Calling partners', place_accepted: 'Partner said yes', calling_volunteer: 'Calling a volunteer', on_the_way: 'On the way' }[l.stage]];
+    return `<div class="rc-lot"><div class="rc-lothead"><b>${fmt(l.portions)} ${esc(lower(l.item))}</b>${dot(...label)}${lotCancel(l)}</div><ol class="rc-track">${li}</ol>${lotCancelConfirm(l)}</div>`;
   }
   function outreachCard() {
     const all = lots();
     if (!all.length) return '';
-    return hqRow(bubble('I am calling nonprofits nearby. The first one to say yes gets it, then I call a volunteer to take it there.') +
+    return hqRow(bubble('I am calling partners nearby. The first one to say yes gets it, then I call a volunteer to take it there.') +
       `<div class="rc-cardm">${all.map(lotTrack).join('')}</div>`);
   }
   function summaryCard() {
@@ -539,7 +545,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const note = mine ? rec.note : '';
     slot('recnote').textContent = note;
     slot('recnote').hidden = !note;
-    input.placeholder = st === 'outreach' || st === 'done' ? 'Post an update to the team' : st === 'ready' || ui.count ? 'Say or type “yes” to alert nonprofits' : 'Say or type what’s left';
+    input.placeholder = st === 'outreach' || st === 'done' ? 'Post an update to the team' : st === 'ready' || ui.count ? 'Say or type “yes” to alert partners' : 'Say or type what’s left';
     composer.querySelector('.rc-send').disabled = busy || !state;
   }
   const recTime = () => { const s = Math.floor((Date.now() - rec.started) / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -632,14 +638,14 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   const callMsgs = new Map();
   const callBtn = (v) => `<button type="button" class="rc-btn rc-soft rc-sm" data-act="volCall" data-id="${esc(v.id)}"${dis()}>${icon.phone}<span>Call</span></button>`;
   const callNote = (v) => { const m = callMsgs.get(v.id); if (!m) return ''; return `<p class="${m.ok ? 'rc-ok' : 'rc-warn'}" role="status">${esc(m.text)}${m.needPhone ? ' <button type="button" class="rc-link" data-act="account">Add your phone number</button>' : ''}</p>`; };
-  // ---- nonprofits and volunteers tabs -------------------------------------
+  // ---- partners and volunteers tabs -------------------------------------
   const msgHtml = () => (pageMsg ? `<p class="${pageMsg.ok ? 'rc-ok' : 'rc-warn'}" role="status">${esc(pageMsg.text)}</p>` : '');
   const acceptsText = (p) => (p.accepts || []).map((a) => lower(ACCEPTS.find(([k]) => k === a)?.[1] || a)).join(', ') || 'nothing set';
   function placeForm() {
     const f = pform;
     const p = f.id ? placeById(f.id) : null;
     const phoneHint = p && phoneSet(p) ? `Ends in ${phoneLast4(p)}. Type a new number to change it.` : 'HQ calls this number. No need to type +1.';
-    return `<div class="rc-cardm rc-form"><h3>${p ? `Edit ${esc(p.name)}` : 'Add a nonprofit'}</h3>
+    return `<div class="rc-cardm rc-form"><h3>${p ? `Edit ${esc(p.name)}` : 'Add a partner'}</h3>
       <label class="rc-fld"><span>Name</span><input data-f="pf" data-k="name" value="${esc(f.name)}" placeholder="Partner shelter C" autocomplete="off"></label>
       <div class="rc-fld"><span>Type</span>${seg('pf', 'type', PLACE_TYPES, f.type)}</div>
       <label class="rc-fld"><span>Phone</span><input type="tel" inputmode="tel" data-f="pf" data-k="phone" value="${esc(f.phone)}" placeholder="762 235 7374" autocomplete="off"></label><p class="rc-hint">${esc(phoneHint)}</p>
@@ -649,15 +655,15 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       <div class="rc-fld"><span>Accepts</span><div class="rc-toggles">${ACCEPTS.map(([k, label]) => `<button type="button" aria-pressed="${f.accepts.includes(k)}" data-act="toggleAccept" data-v="${k}">${label}</button>`).join('')}</div></div>
       <label class="rc-fld"><span>Address (optional)</span><input data-f="pf" data-k="address" value="${esc(f.address)}" placeholder="12 Main St" autocomplete="off"></label>
       ${msgHtml()}
-      <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="placeSave"${dis()}>${p ? 'Save' : 'Add nonprofit'}</button><button type="button" class="rc-btn rc-soft" data-act="formCancel">Cancel</button></div></div>`;
+      <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="placeSave"${dis()}>${p ? 'Save' : 'Add partner'}</button><button type="button" class="rc-btn rc-soft" data-act="formCancel">Cancel</button></div></div>`;
   }
   function placesPage() {
-    const head = `<div class="rc-pagehead rc-pagehead-end">${pform ? '' : '<button type="button" class="rc-btn rc-primary" data-act="placeNew">Add nonprofit</button>'}</div>`;
+    const head = `<div class="rc-pagehead rc-pagehead-end">${pform ? '' : '<button type="button" class="rc-btn rc-primary" data-act="placeNew">Add partner</button>'}</div>`;
     const rows = places().map((p) => {
       if (pform?.id === p.id) return placeForm();
       const confirming = confirmRm === `p:${p.id}`;
       const actions = confirming
-        ? `<p class="rc-line">Remove ${esc(p.name)}?</p><div class="rc-actions"><button type="button" class="rc-btn rc-danger" data-act="placeRmYes" data-id="${esc(p.id)}"${dis()}>Yes, remove</button><button type="button" class="rc-btn rc-soft" data-act="rmNo">Keep</button></div>`
+        ? `<p class="rc-line">Remove ${esc(p.name)} and cancel their open jobs?</p><div class="rc-actions"><button type="button" class="rc-btn rc-danger" data-act="placeRmYes" data-id="${esc(p.id)}"${dis()}>Remove and cancel their open jobs</button><button type="button" class="rc-btn rc-soft" data-act="rmNo">Keep</button></div>`
         : `<div class="rc-actions"><button type="button" class="rc-btn rc-soft rc-sm" data-act="placeEdit" data-id="${esc(p.id)}">Edit</button><button type="button" class="rc-btn rc-soft rc-sm" data-act="placeRm" data-id="${esc(p.id)}">Remove</button></div>`;
       const type = PLACE_TYPES.find(([k]) => k === p.type)?.[1] || p.type || '';
       return `<div class="rc-cardm rc-entity"><div class="rc-entityhead"><b>${esc(p.name)}</b>${dot(...placeStatus(p))}</div>
@@ -665,7 +671,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
         <p class="rc-line">Accepts ${esc(acceptsText(p))}</p>
         <p class="rc-line">${esc(phoneText(p))}</p>${p.address ? `<p class="rc-line">${esc(p.address)}</p>` : ''}${actions}</div>`;
     }).join('');
-    const empty = !places().length && !pform ? '<div class="rc-empty"><p>No nonprofits yet. Add the first place that can take food.</p></div>' : '';
+    const empty = !places().length && !pform ? '<div class="rc-empty"><p>No partners yet. Add the first place that can take food.</p></div>' : '';
     return head + (pform && !pform.id ? placeForm() : msgHtml()) + empty + `<div class="rc-list">${rows}</div>`;
   }
   function volForm() {
@@ -685,7 +691,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       if (vform?.id === v.id) return volForm();
       const confirming = confirmRm === `v:${v.id}`;
       const actions = confirming
-        ? `<p class="rc-line">Remove ${esc(v.name)} from the team?</p><div class="rc-actions"><button type="button" class="rc-btn rc-danger" data-act="volRmYes" data-id="${esc(v.id)}"${dis()}>Yes, remove</button><button type="button" class="rc-btn rc-soft" data-act="rmNo">Keep</button></div>`
+        ? `<p class="rc-line">Remove ${esc(v.name)} and cancel their open jobs?</p><div class="rc-actions"><button type="button" class="rc-btn rc-danger" data-act="volRmYes" data-id="${esc(v.id)}"${dis()}>Remove and cancel their open jobs</button><button type="button" class="rc-btn rc-soft" data-act="rmNo">Keep</button></div>`
         : `<div class="rc-actions">${callBtn(v)}<button type="button" class="rc-btn rc-soft rc-sm" data-act="volEdit" data-id="${esc(v.id)}">Edit</button><button type="button" class="rc-btn rc-soft rc-sm" data-act="volRm" data-id="${esc(v.id)}">Remove</button></div>`;
       return `<div class="rc-cardm rc-entity"><div class="rc-entityhead">${avatar(v.name)}<b class="rc-grow">${esc(v.name)}</b>${dot(...volStatus(v))}</div>
         <p class="rc-line">${esc(phoneText(v))}</p>${actions}${callNote(v)}</div>`;
@@ -709,7 +715,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     let title; let lead;
     if (!event()) { title = 'Ready when you are'; lead = 'Pick an event, then take a photo of what is left.'; }
     else if (!report()) { title = event().name; lead = 'Waiting to hear what is left.'; }
-    else if (st === 'ready') { title = `About ${foodLine(report().items)}`; lead = 'Nonprofits have not been alerted yet.'; }
+    else if (st === 'ready') { title = `About ${foodLine(report().items)}`; lead = 'Partners have not been alerted yet.'; }
     else if (r.need === 0 && r.onWay === 0) { title = r.left === 0 ? 'Nothing was left over' : 'Everything is delivered'; lead = `${fmt(r.rescued)} portions found a home.`; }
     else if (urg === 'ended' || urg === 'closed') { title = `${fmt(r.need)} portions did not get a home`; lead = endReason(); }
     else { title = `${fmt(r.need + r.onWay)} portions on the move`; lead = `Now ${lotActivity(lots())}. ${fmt(r.onWay)} on the way, ${fmt(r.rescued)} delivered.`; }
@@ -722,20 +728,29 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     return `<div class="rc-card"><div class="rc-ringbox">${ring(150, 16)}<span class="rc-ring-mid"><b data-t="timer">${timerText()}</b><small>${esc(sub)}</small></span></div>
       <h3>${esc(title)}</h3><p class="rc-lead">${esc(lead)}</p>${bar}
       <div class="rc-legend"><span>${legendDot('var(--green)')}${fmt(r.rescued)} rescued</span><span>${legendDot('var(--purple)')}${fmt(r.onWay)} on the way</span><span>${legendDot('var(--orange)')}${fmt(r.need)} unclaimed</span></div></div>
-      <p class="rc-label">Nonprofits</p>${list(places(), (p) => `<li><span class="rc-grow">${esc(p.name)}</span>${dot(...placeStatus(p))}</li>`)}
-      <p class="rc-label">Volunteers</p>${list(volunteers(), (v) => `<li>${avatar(v.name)}<span class="rc-grow">${esc(v.name)}</span>${dot(...volStatus(v))}${callBtn(v)}</li>${callNote(v) ? `<li>${callNote(v)}</li>` : ''}`)}`;
+      <p class="rc-label">Partners</p>${list(places(), (p) => `<li><span class="rc-grow">${esc(p.name)}</span>${dot(...placeStatus(p))}</li>`)}
+      <p class="rc-label">Volunteers</p>${list(volunteers(), (v) => `<li>${avatar(v.name)}<span class="rc-grow">${esc(v.name)}</span>${dot(...volStatus(v))}${callBtn(v)}</li>${callNote(v) ? `<li>${callNote(v)}</li>` : ''}`)}
+      ${cancelRescueHtml()}`;
+  }
+  // The rescue can be cancelled once something has been counted and it is not over yet.
+  function cancelRescueHtml() {
+    if (!report() || rescueStage() === 'done') return '';
+    if (confirmRm === 'rescue') {
+      return `<div class="rc-actions rc-cancelrescue"><p class="rc-line">Cancel this rescue? Every open job stops and the event is kept.</p><button type="button" class="rc-btn rc-danger" data-act="rescueCancelYes"${dis()}>Yes, cancel the rescue</button><button type="button" class="rc-btn rc-soft" data-act="rmNo">Keep going</button></div>`;
+    }
+    return `<div class="rc-actions rc-cancelrescue"><button type="button" class="rc-link" data-act="rescueCancel">Cancel this rescue</button></div>`;
   }
   function simulateRows() {
     const b = (act, label, offerId) => `<button type="button" class="rc-btn rc-soft rc-sm" data-act="${act}" data-id="${esc(offerId)}"${dis()}>${label}</button>`;
-    // Stage 1: a nonprofit answering its call.
+    // Stage 1: a partner answering its call.
     const placeRows = lots().filter((l) => l.stage === 'calling_places').flatMap((l) => (l.places || []).filter((p) => p.status === 'calling' && p.offerId).map((p) =>
       `<div class="rc-simrow"><p><b>${esc(p.name)}</b> · ${fmt(l.portions)} ${esc(lower(l.item))}</p><div class="rc-actions">${b('simAccept', 'Says yes', p.offerId)}${b('simDecline', 'Says no', p.offerId)}</div></div>`));
     // Demo path (POST /api/demo/simulate): works even when nobody has a phone. Never places a call.
-    const demoNext = { proposed: ['place_yes', 'Nonprofit says yes'], calling_places: ['place_yes', 'Nonprofit says yes'], waiting_volunteer: ['volunteer_accept', 'A volunteer takes it'], calling_volunteer: ['volunteer_accept', 'Volunteer accepts'], on_the_way: ['delivered', 'Delivered'] };
+    const demoNext = { proposed: ['place_yes', 'Partner says yes'], calling_places: ['place_yes', 'Partner says yes'], waiting_volunteer: ['volunteer_accept', 'A volunteer takes it'], calling_volunteer: ['volunteer_accept', 'Volunteer accepts'], on_the_way: ['delivered', 'Delivered'] };
     const demoRows = (state?.lots || []).filter((l) => demoNext[l.status]).map((l) => `<div class="rc-simrow"><p><b>Demo</b> · ${fmt(l.portions)} ${esc(lower(l.item))} · ${esc(l.label || l.status)}</p><div class="rc-actions"><button type="button" class="rc-btn rc-soft rc-sm" data-act="simDemo" data-id="${esc(l.id)}" data-v="${demoNext[l.status][0]}"${dis()}>${demoNext[l.status][1]} (demo, no call)</button></div></div>`);
     placeRows.push(...demoRows);
     const open = lots().filter((l) => l.offerId && ['calling_volunteer', 'on_the_way'].includes(l.stage));
-    if (!open.length && !placeRows.length) return '<p class="rc-line">Nothing to simulate yet. Start a rescue and alert nonprofits first.</p>';
+    if (!open.length && !placeRows.length) return '<p class="rc-line">Nothing to simulate yet. Start a rescue and alert partners first.</p>';
     return placeRows.join('') + open.map((l) => {
       const o = offers().find((x) => x.id === l.offerId) || {};
       const v = volOf(l.volunteerId);
@@ -743,7 +758,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       const btns = o.status === 'offered' ? b('simAccept', 'Accept') + b('simDecline', 'Decline')
         : o.status === 'accepted' ? b('simPickup', 'Picked up') + b('simDelivered', 'Delivered')
           : o.status === 'picked_up' ? b('simDelivered', 'Delivered') : '';
-      return `<div class="rc-simrow"><p><b>${esc(v ? v.name : 'Volunteer')}</b> · ${fmt(l.portions)} ${esc(lower(l.item))} to ${esc(placeById(l.placeId)?.name || 'a nonprofit')}</p><div class="rc-actions">${btns || '<span class="rc-hint">Nothing to reply to.</span>'}</div></div>`;
+      return `<div class="rc-simrow"><p><b>${esc(v ? v.name : 'Volunteer')}</b> · ${fmt(l.portions)} ${esc(lower(l.item))} to ${esc(placeById(l.placeId)?.name || 'a partner')}</p><div class="rc-actions">${btns || '<span class="rc-hint">Nothing to reply to.</span>'}</div></div>`;
     }).join('');
   }
   function accountHtml() {
@@ -760,8 +775,8 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
         <button type="button" class="rc-btn rc-soft" data-act="reset"${dis()}>Reset this rescue</button>
         ${confirmRm === 'all' ? `<button type="button" class="rc-btn rc-danger" data-act="resetAllYes"${dis()}>Yes, reset everything</button>` : '<button type="button" class="rc-btn rc-soft" data-act="resetAll">Reset everything</button>'}
       </div>
-      ${confirmRm === 'all' ? '<p class="rc-hint">This puts back the sample nonprofits and volunteers and removes yours.</p>' : ''}
-      <h4>Simulate reply</h4><p class="rc-hint">Stand in for a nonprofit or volunteer answering their call.</p>${simulateRows()}
+      ${confirmRm === 'all' ? '<p class="rc-hint">This puts back the sample partners and volunteers and removes yours.</p>' : ''}
+      <h4>Simulate reply</h4><p class="rc-hint">Stand in for a partner or volunteer answering their call.</p>${simulateRows()}
       ${volunteers().length ? `<h4>Volunteer pages</h4><div class="rc-actions">${volunteers().map((v) => `<a class="rc-link" href="/v/${encodeURIComponent(v.id)}" target="_blank" rel="noopener">${esc(firstName(v.name))}</a>`).join('')}</div>` : ''}</div>
       <div class="rc-section rc-keys"><h3>Keyboard shortcuts</h3>${keys.map(([k, d]) => `<p class="rc-kv"><span>${esc(d)}</span><b><kbd>${esc(k)}</kbd></b></p>`).join('')}</div>`;
   }
@@ -799,7 +814,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     lastStage = st;
     const showPin = st === 'ready' || st === 'outreach' || (st === 'done' && Date.now() < doneUntil);
     pin.hidden = !showPin;
-    slot('pin-sub').textContent = st === 'ready' ? 'Ready to alert nonprofits' : st === 'outreach' ? shortActivity() : `${fmt(remaining().rescued)} rescued`;
+    slot('pin-sub').textContent = st === 'ready' ? 'Ready to alert partners' : st === 'outreach' ? shortActivity() : `${fmt(remaining().rescued)} rescued`;
     slot('sample').hidden = !(ui.sample && e);
     if (tab === 'rescue') { renderThread(); renderComposer(); } else setHtml(slot('page'), pageHtml());
     setHtml(slot('status-desk'), statusHtml());
@@ -901,7 +916,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   const scrollThread = () => { const t = slot('thread'); t.scrollTop = t.scrollHeight; };
 
   // ---- rescue actions ----------------------------------------------------------
-  async function alertNonprofits() {
+  async function alertPartners() {
     if (alerting || busy) return;
     const st = rescueStage();
     alerting = true;
@@ -924,11 +939,11 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       }
       const r = await act('POST', '/api/outreach/places', {}, { quiet: true });
       if (!r.ok && r.missing) {
-        say('hq', 'Calling nonprofits is not on this server yet, so I sent the offers straight to volunteers.');
+        say('hq', 'Calling partners is not on this server yet, so I sent the offers straight to volunteers.');
         const s = await act('POST', '/api/offers/send', {});
         if (!s.ok) say('hq', s.message || 'The offers did not go out. Try again.');
       } else if (!r.ok) {
-        say('hq', r.message || 'I could not start calling nonprofits. Try again.');
+        say('hq', r.message || 'I could not start calling partners. Try again.');
       }
     } finally {
       alerting = false;
@@ -987,12 +1002,12 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   }
   function ask(kind) { ui.talk = [...ui.talk, { ask: kind, at: Date.now() }].slice(-30); saveUi(); render(); scrollThread(); }
 
-  // Before a rescue starts: one sentence starts it (POST /api/quick: event, count, then nonprofits are called).
+  // Before a rescue starts: one sentence starts it (POST /api/quick: event, count, then partners are called).
   async function quickStart(text) {
     say('me', text);
     render(); scrollThread();
     carryTalk = true;
-    // Preview only: nothing is created until the user taps Yes, alert nonprofits.
+    // Preview only: nothing is created until the user taps Yes, alert partners.
     const r = await act('POST', '/api/quick', { text, preview: true }, { quiet: true });
     carryTalk = false;
     if (r.ok && r.data?.quick?.preview) {
@@ -1001,7 +1016,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       for (const it of event()?.items || []) if (!items.some((x) => lower(x.item) === lower(it.item))) items.push({ item: it.item, left: 0, unit: 'portions' });
       ui.count = { source: 'voice', items, venue: event() ? '' : u.venue || '', goodForMinutes: event() ? null : r.data.quick.goodForMinutes || null, eventName: u.eventName || '' };
       ui.editing = false; photos = [];
-      say('hq', `Got it: about ${foodLine(items) || 'your leftovers'}${u.venue && !event() ? ` at ${u.venue}` : ''}. Tap Yes, alert nonprofits to start calling.`);
+      say('hq', `Got it: about ${foodLine(items) || 'your leftovers'}${u.venue && !event() ? ` at ${u.venue}` : ''}. Tap Yes, alert partners to start calling.`);
     } else if (r.ok) {
       ui.count = null; ui.editing = false; photos = [];
     } else if (r.missing) {
@@ -1019,7 +1034,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const t = lower(text);
     const st = rescueStage();
     const pendingCount = (st === 'none' || st === 'count') && ui.count;
-    if (/^(yes|yeah|yep|yup|sure|send it|alert|do it|go ahead|confirm|ok(ay)?)\b/.test(t) && (st === 'ready' || pendingCount)) { say('me', text); render(); return alertNonprofits(); }
+    if (/^(yes|yeah|yep|yup|sure|send it|alert|do it|go ahead|confirm|ok(ay)?)\b/.test(t) && (st === 'ready' || pendingCount)) { say('me', text); render(); return alertPartners(); }
     if (/who'?s free|who is free/.test(t)) return ask('free');
     if (/what'?s left|what is left/.test(t)) return ask('left');
     const fix = t.match(/\b(?:make it|change it to|change to|set it to|actually)\s+(\d+)\s+([a-z][a-z ]*)/);
@@ -1031,7 +1046,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       render(); scrollThread(); return;
     }
     if (st === 'none' || st === 'count') return quickStart(text);
-    if (st === 'ready') { say('me', text); say('hq', 'Say “yes” or tap Yes, alert nonprofits to start calling.'); render(); scrollThread(); return; }
+    if (st === 'ready') { say('me', text); say('hq', 'Say “yes” or tap Yes, alert partners to start calling.'); render(); scrollThread(); return; }
     const r = await act('POST', '/api/updates', { text });
     if (!r.ok) { say('me', text); say('hq', r.message || 'That update did not go out. Try again.'); render(); }
     scrollThread();
@@ -1145,7 +1160,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     } finally { agentBusy = false; saveUi(); render(); }
   }
 
-  // ---- nonprofit / volunteer actions ---------------------------------------
+  // ---- partner / volunteer actions ---------------------------------------
   const note = (text, ok) => { pageMsg = { text, ok }; };
   async function pageAct(method, path, body, missing, done) {
     const r = await act(method, path, body, { quiet: true, missing });
@@ -1169,8 +1184,8 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     if (String(f.address || '').trim() || f.id) body.address = String(f.address || '').trim();
     if (String(f.phone || '').trim()) body.phone = String(f.phone).trim();
     const ok = f.id
-      ? await pageAct('PATCH', `/api/places/${encodeURIComponent(f.id)}`, body, 'This server cannot edit nonprofits yet.', `Saved ${name}.`)
-      : await pageAct('POST', '/api/places', body, 'This server cannot add nonprofits yet.', `Added ${name}.`);
+      ? await pageAct('PATCH', `/api/places/${encodeURIComponent(f.id)}`, body, 'This server cannot edit partners yet.', `Saved ${name}.`)
+      : await pageAct('POST', '/api/places', body, 'This server cannot add partners yet.', `Added ${name}.`);
     if (ok) { pform = null; render(); }
   }
   async function saveVolunteer() {
@@ -1239,7 +1254,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       case 'countByHand': ui.count = { source: 'manual', items: (event()?.items || []).map((it) => ({ item: it.item, left: 0, unit: 'portions' })) }; ui.editing = true; ui.estMessage = ''; saveUi(); render(); scrollThread(); break;
       case 'editAmounts': ui.editing = true; render(); scrollThread(); break;
       case 'doneEdit': ui.editing = false; if (ui.count?.source === 'photo') ui.count.source = 'photo_edited'; saveUi(); render(); scrollThread(); break;
-      case 'alert': await alertNonprofits(); break;
+      case 'alert': await alertPartners(); break;
       case 'step': {
         const scope = button.dataset.scope; const k = button.dataset.k; const dir = Number(button.dataset.dir);
         const target = scope === 'count' ? ui.count?.items[i] : scope === 'draft-item' ? evView.draft?.items[i] : null;
@@ -1272,14 +1287,14 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
         else if (scope === 'vf' && vform) vform[k] = v;
         render(); break;
       }
-      // nonprofits
+      // partners
       case 'placeNew': pform = blankPlace(); confirmRm = null; pageMsg = null; render(); break;
       case 'placeEdit': { const p = placeById(id); if (p) pform = { id, name: p.name || '', type: p.type || 'shelter', distanceMiles: p.distanceMiles ?? '', capacity: p.capacity ?? '', accepts: [...(p.accepts || [])], address: p.address || '', phone: '' }; confirmRm = null; pageMsg = null; render(); break; }
       case 'toggleAccept': if (pform) { const v = button.dataset.v; pform.accepts = pform.accepts.includes(v) ? pform.accepts.filter((x) => x !== v) : [...pform.accepts, v]; render(); } break;
       case 'placeSave': await savePlace(); break;
-      case 'placeRmPhone': if (pform?.id) { const ok = await pageAct('PATCH', `/api/places/${encodeURIComponent(pform.id)}`, { phone: '' }, 'This server cannot change nonprofit phones yet.', 'Removed the number.'); if (ok) pform.phone = ''; render(); } break;
+      case 'placeRmPhone': if (pform?.id) { const ok = await pageAct('PATCH', `/api/places/${encodeURIComponent(pform.id)}`, { phone: '' }, 'This server cannot change partner phones yet.', 'Removed the number.'); if (ok) pform.phone = ''; render(); } break;
       case 'placeRm': confirmRm = `p:${id}`; pageMsg = null; render(); break;
-      case 'placeRmYes': { const name = placeById(id)?.name || 'The nonprofit'; if (await pageAct('DELETE', `/api/places/${encodeURIComponent(id)}`, {}, 'This server cannot remove nonprofits yet.', `${name} was removed.`)) confirmRm = null; render(); break; }
+      case 'placeRmYes': { const name = placeById(id)?.name || 'The partner'; if (await pageAct('DELETE', `/api/places/${encodeURIComponent(id)}`, {}, 'This server cannot remove partners yet.', `${name} was removed.`)) confirmRm = null; render(); break; }
       // volunteers
       case 'volNew': vform = { name: '', phone: '' }; confirmRm = null; pageMsg = null; render(); break;
       case 'volEdit': { const v = volOf(id); if (v) vform = { id, name: v.name, phone: '', optedIn: String(v.optedIn !== false) }; confirmRm = null; pageMsg = null; render(); break; }
@@ -1288,6 +1303,11 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       case 'volRmYes': { const name = volOf(id)?.name || 'The volunteer'; if (await pageAct('DELETE', `/api/volunteers/${encodeURIComponent(id)}`, {}, 'This server cannot remove volunteers yet.', `${name} was removed from the team.`)) confirmRm = null; render(); break; }
       case 'formCancel': pform = null; vform = null; pageMsg = null; render(); break;
       case 'rmNo': confirmRm = null; render(); break;
+      // cancel a job / the rescue
+      case 'lotCancel': confirmRm = `lot:${id}`; render(); break;
+      case 'lotCancelYes': { const r = await act('POST', `/api/lots/${encodeURIComponent(id)}/cancel`, {}, { quiet: true }); if (r.ok) { confirmRm = null; note('Cancelled that job.', true); } else note(r.message || 'This server cannot cancel a job yet.', false); render(); break; }
+      case 'rescueCancel': confirmRm = 'rescue'; render(); break;
+      case 'rescueCancelYes': { const r = await act('POST', '/api/rescue/cancel', {}, { quiet: true }); if (r.ok) { confirmRm = null; ui = freshUi(); photos = []; saveUi(); sheetView = null; setTab('rescue'); note('Rescue cancelled. The event is kept.', true); } else note(r.message || 'This server cannot cancel a rescue yet.', false); render(); break; }
       // demo tools
       case 'sample': {
         ui.pendingSample = true;
@@ -1297,7 +1317,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
         break;
       }
       case 'ff': { const r = await act('POST', '/api/demo/fast-forward', { minutes: 1 }, { quiet: true }); note(r.ok ? 'Moved the clock 1 minute ahead.' : r.message, r.ok); render(); break; }
-      case 'reset': { const r = await act('POST', '/api/demo/reset', {}, { quiet: true }); if (r.ok) { ui = freshUi(); photos = []; saveUi(); note('Reset the rescue. Your nonprofits and volunteers are kept.', true); } else note(r.message, false); render(); break; }
+      case 'reset': { const r = await act('POST', '/api/demo/reset', {}, { quiet: true }); if (r.ok) { ui = freshUi(); photos = []; saveUi(); note('Reset the rescue. Your partners and volunteers are kept.', true); } else note(r.message, false); render(); break; }
       case 'resetAll': confirmRm = 'all'; render(); break;
       case 'resetAllYes': { const r = await act('POST', '/api/demo/reset-all', {}, { quiet: true }); confirmRm = null; if (r.ok) { ui = freshUi(); photos = []; saveUi(); note('Everything is back to the sample data.', true); } else note(r.message, false); render(); break; }
       case 'volCall': {

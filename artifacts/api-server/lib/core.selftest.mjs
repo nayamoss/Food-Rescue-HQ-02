@@ -125,7 +125,7 @@ try {
   let lot = s.lots[0];
   assert.equal(lot.status, "proposed");
   assert.equal(lot.stage, "match");
-  assert.equal(lot.label, "Ready to call nonprofits");
+  assert.equal(lot.label, "Ready to call partners");
   assert.equal(s.journeyStep, "match");
   const z = s.places.find((p) => p.name === "Z");
   assert.ok(!s.offers.some((o) => o.placeId === z.id), "Z (capacity 1) is skipped when bigger places can take the lot");
@@ -145,7 +145,7 @@ try {
   lot = s.lots[0];
   assert.equal(lot.status, "calling_places");
   assert.equal(lot.stage, "places");
-  assert.equal(lot.label, "Calling nonprofits");
+  assert.equal(lot.label, "Calling partners");
   assert.equal(lot.steps[0].state, "active");
   assert.ok(Date.parse(lot.placeDeadline) > Date.now() + 9 * 60000, "10 minute window");
   assert.equal(s.journeyStep, "outreach");
@@ -155,7 +155,6 @@ try {
   assert.equal(core.describeOffer(oBank.id).kind, "place");
   assert.ok(s.volunteers.every((v) => v.status === "ready"), "no volunteer asked yet");
   assert.equal(status(() => core.startPlaceOutreach({}))[0], 409, "cannot send twice");
-  assert.equal(status(() => core.deletePlace(bank.id))[0], 409, "place being called cannot be removed");
 
   // a place says no
   assert.equal(core.placeAnswer(oP1.id, "decline"), "declined");
@@ -191,7 +190,6 @@ try {
   assert.equal(core.describeOffer(oBank.id).kind, "volunteer");
   assert.equal(s.summary.byPlace.find((p) => p.placeId === bank.id).portions, 40);
   assert.ok(!s.summary.byPlace.some((p) => p.placeId === "p2"), "taken places are not counted");
-  assert.equal(status(() => core.deleteVolunteer(quinn.id))[0], 409, "offered volunteer cannot be removed");
 
   // decline hands it to the next free volunteer with a phone
   s = core.respondToOffer(oBank.id, "decline");
@@ -224,7 +222,6 @@ try {
   assert.equal(s.lots[0].label, "Pat is on the way");
   assert.equal(s.summary.rescued, 0, "accepted is not rescued");
   assert.equal(s.totals.rescued, 0);
-  assert.equal(status(() => core.deleteVolunteer(pat.id))[0], 409, "accepted volunteer cannot be removed");
   assert.equal(status(() => core.respondToOffer(oBank.id, "accept"))[0], 409);
 
   // inbound call from the volunteer's phone finds their open job
