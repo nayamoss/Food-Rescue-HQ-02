@@ -19,8 +19,11 @@ core.onChange((snap) => {
 let voice = null;
 try { voice = await import("./lib/voice.js"); } catch { voice = null; }
 // The voice module talks to the core only through this small adapter.
+// getState returns the internal state (real phone numbers) because voice and sms must dial and match them.
+// It is server-side only; the browser gets core.snapshot(), which masks phones.
 const voiceCore = {
-  getState: () => core.snapshot(),
+  getState: () => core.internalState(),
+  volunteerPhone: (id) => core.volunteerPhone(id),
   describeOffer: (id) => core.describeOffer(id),
   respondToOffer: (id, action) => core.respondToOffer(id, action),
   addFeed: (text) => { try { core.postUpdate(text); } catch { /* feed is best effort */ } },
@@ -82,7 +85,8 @@ app.post("/api/incidents", route(201, (req) => core.createIncident(req.body)));
 app.post("/api/demo/fast-forward", route(200, () => core.fastForward()));
 // Coordinator updates only appear in the shared thread; nothing is texted yet.
 app.post("/api/updates", route(201, (req) => core.postUpdate(req.body?.text)));
-app.post("/api/demo/reset", route(200, () => core.reset()));
+app.post("/api/demo/reset", route(200, () => core.reset())); // keeps the user's volunteers and places
+app.post("/api/demo/reset-all", route(200, () => core.resetAll())); // back to seeded volunteers and places
 app.post("/api/event", route(201, (req) => core.createEvent(req.body)));
 app.patch("/api/event", route(200, (req) => core.patchEvent(req.body)));
 app.post("/api/report", route(201, (req) => core.submitReport(req.body)));
@@ -107,7 +111,13 @@ app.post("/api/offers/:id/call", async (req, res) => {
     return res.status(502).json({ error: "The call did not go through. Try again." });
   }
 });
+app.post("/api/volunteers", route(201, (req) => core.addVolunteer(req.body)));
+app.patch("/api/volunteers/:id", route(200, (req) => core.patchVolunteer(req.params.id, req.body)));
+app.delete("/api/volunteers/:id", route(200, (req) => core.deleteVolunteer(req.params.id)));
 app.post("/api/volunteers/:id/phone", route(200, (req) => core.setVolunteerPhone(req.params.id, req.body?.phone)));
+app.post("/api/places", route(201, (req) => core.addPlace(req.body)));
+app.patch("/api/places/:id", route(200, (req) => core.patchPlace(req.params.id, req.body)));
+app.delete("/api/places/:id", route(200, (req) => core.deletePlace(req.params.id)));
 app.get("/v/:id", (_req, res) => {
   const page = path.join(root, "public", "v.html");
   if (existsSync(page)) return res.sendFile(page);
