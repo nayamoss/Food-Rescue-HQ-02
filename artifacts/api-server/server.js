@@ -1,65 +1,29 @@
 import express from "express";
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import pino from "pino";
+import * as core from "./lib/core.js";
 
 const log = pino();
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const dataDir = path.join(root, "data");
-const stateFile = path.join(dataDir, "state.json");
-mkdirSync(dataDir, { recursive: true });
-const initial = () => ({
-  volunteers: [
-    { id: "v1", name: "Alex Rivera", phone: "+12025550101", optedIn: true },
-    { id: "v2", name: "Jordan Lee", phone: "+12025550102", optedIn: true },
-    { id: "v3", name: "Sam Taylor", phone: "+12025550103", optedIn: true },
-    { id: "v4", name: "Morgan Chen", phone: "+12025550104", optedIn: true },
-    { id: "v5", name: "Casey Brooks", phone: "+12025550105", optedIn: false },
-  ],
-  incident: null,
-  feed: [],
-});
-let state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : initial();
-if (!Array.isArray(state.volunteers) || !Array.isArray(state.feed) ||
-    (state.incident !== null && (!Array.isArray(state.incident?.assignments) ||
-      !Number.isFinite(Date.parse(state.incident.deadline))))) {
-  throw new Error("Invalid saved state. Refusing to overwrite data/state.json.");
-}
 const clients = new Set();
-const active = () => state.incident && ["open", "in_progress"].includes(state.incident.status);
-function snapshot() {
-  const incident = state.incident;
-  const total = incident?.total ?? 0;
-  const assigned = incident?.assignments.reduce((sum, a) => sum + a.claimed, 0) ?? 0;
-  const rescued = incident?.assignments.reduce((sum, a) => sum + a.pickedUp, 0) ?? 0;
-  return { ...state, totals: { total, unclaimed: Math.max(0, total - assigned), claimed: Math.max(0, assigned - rescued), rescued } };
-}
-const FEED_LIMIT = 200;
-function entry(text, kind = "system") {
-  return { id: randomUUID(), at: new Date().toISOString(), text, kind };
-}
-function commit(next) {
-  if (next.feed.length > FEED_LIMIT) next = { ...next, feed: next.feed.slice(0, FEED_LIMIT) };
-  writeFileSync(`${stateFile}.tmp`, JSON.stringify(next, null, 2));
-  renameSync(`${stateFile}.tmp`, stateFile);
-  state = next;
-  const message = `data: ${JSON.stringify(snapshot())}\n\n`;
+core.onChange((snap) => {
+  const message = `data: ${JSON.stringify(snap)}\n\n`;
   for (const res of clients) res.write(message);
-}
-function expire() {
-  if (active() && Date.now() >= Date.parse(state.incident.deadline)) {
-    const rescued = snapshot().totals.rescued;
-    const status = rescued >= state.incident.total ? "resolved" : "expired";
-    commit({ ...state, incident: { ...state.incident, status }, feed: [
-      entry(status === "expired" ? "Safety window ended. Remaining food is no longer available for rescue." : "All food rescued. Incident resolved.", status),
-      ...state.feed,
-    ] });
+});
+
+// Optional voice module (owned separately). If it is missing or a call fails, the app keeps working.
+let voice = null;
+try { voice = await import("./lib/voice.js"); } catch { voice = null; }
+async function placeCalls() {
+  const ids = core.takePendingCalls();
+  if (!voice || typeof voice.callVolunteer !== "function") return;
+  for (const offerId of ids) {
+    try { await voice.callVolunteer(offerId); } catch (error) { log.error(error, "Voice call failed"); }
   }
 }
-if (!existsSync(stateFile)) commit(state);
-expire();
+
 const app = express();
 // The graduated app has a prefixed API route; the original dashboard keeps /api.
 app.use((req, _res, next) => {
@@ -69,12 +33,12 @@ app.use((req, _res, next) => {
   next();
 });
 app.disable("x-powered-by");
-app.use(express.json({ limit: "8kb" }));
+app.use(express.json({ limit: "12mb" })); // photo estimates arrive as data URLs
 app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
 app.get("/api/healthz", (_req, res) => res.json({ status: "ok" }));
-app.get("/api/state", (_req, res) => { expire(); res.json(snapshot()); });
+app.get("/api/state", (_req, res) => { core.expire(); res.json(core.snapshot()); });
 app.get("/api/stream", (req, res) => {
-  expire();
+  core.expire();
   res.status(200).set({
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
@@ -82,48 +46,46 @@ app.get("/api/stream", (req, res) => {
     "X-Accel-Buffering": "no",
   });
   res.flushHeaders();
-  res.write(`data: ${JSON.stringify(snapshot())}\n\n`);
+  res.write(`data: ${JSON.stringify(core.snapshot())}\n\n`);
   clients.add(res);
   const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 15000);
   req.on("close", () => { clearInterval(heartbeat); clients.delete(res); });
 });
-app.post("/api/incidents", (req, res) => {
-  expire();
-  if (active()) return res.status(409).json({ error: "An incident is already active. Reset it before creating another." });
-  const { food, total, location, minutes } = req.body ?? {};
-  if (typeof food !== "string" || !food.trim() || food.length > 100 ||
-      typeof location !== "string" || !location.trim() || location.length > 200 ||
-      !Number.isInteger(total) || total < 1 || total > 1000000 ||
-      typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0 || minutes > 1440) {
-    return res.status(400).json({ error: "Provide food, location, a positive integer total, and minutes between 0 and 1440." });
-  }
-  const incident = { id: randomUUID(), food: food.trim(), total, location: location.trim(),
-    createdAt: new Date().toISOString(), windowSeconds: Math.round(minutes * 60), deadline: new Date(Date.now() + minutes * 60000).toISOString(), status: "open", assignments: [] };
-  commit({ ...state, incident, feed: [entry(`Incident opened: ${total} ${incident.food} at ${incident.location}. ${minutes}-minute safety window.`, "incident"), ...state.feed] });
-  return res.status(201).json(snapshot());
-});
-app.post("/api/demo/fast-forward", (_req, res) => {
-  expire();
-  if (!active()) return res.status(409).json({ error: "Create an active incident first." });
-  commit({ ...state, incident: { ...state.incident, deadline: new Date(Date.now() + 60000).toISOString() },
-    feed: [entry("Demo fast-forward: safety deadline set to 60 seconds from now.", "demo"), ...state.feed] });
-  res.json(snapshot());
-});
+const route = (status, fn, after) => async (req, res, next) => {
+  try {
+    const out = fn(req);
+    res.status(status).json(out);
+    if (after) await after();
+  } catch (error) { next(error); }
+};
+app.post("/api/incidents", route(201, (req) => core.createIncident(req.body)));
+app.post("/api/demo/fast-forward", route(200, () => core.fastForward()));
 // Coordinator updates only appear in the shared thread; nothing is texted yet.
-app.post("/api/updates", (req, res) => {
-  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
-  if (!text || text.length > 280) return res.status(400).json({ error: "Write an update between 1 and 280 characters." });
-  commit({ ...state, feed: [entry(text, "update"), ...state.feed] });
-  res.status(201).json(snapshot());
+app.post("/api/updates", route(201, (req) => core.postUpdate(req.body?.text)));
+app.post("/api/demo/reset", route(200, () => core.reset()));
+app.post("/api/event", route(201, (req) => core.createEvent(req.body)));
+app.patch("/api/event", route(200, (req) => core.patchEvent(req.body)));
+app.post("/api/report", route(201, (req) => core.submitReport(req.body)));
+app.post("/api/offers/send", route(200, (req) => core.sendOffers(req.body), placeCalls));
+app.post("/api/offers/:id/respond", route(200, (req) => core.respondToOffer(req.params.id, req.body?.action)));
+app.post("/api/offers/:id/pickup", route(200, (req) => core.pickupOffer(req.params.id)));
+app.post("/api/offers/:id/dropoff", route(200, (req) => core.dropoffOffer(req.params.id)));
+app.post("/api/volunteers/:id/phone", route(200, (req) => core.setVolunteerPhone(req.params.id, req.body?.phone)));
+app.get("/v/:id", (_req, res) => {
+  const page = path.join(root, "public", "v.html");
+  if (existsSync(page)) return res.sendFile(page);
+  res.type("html").send("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Food Rescue HQ</title><p style='font-family:sans-serif;padding:24px'>Volunteer page coming soon.</p>");
 });
-app.post("/api/demo/reset", (_req, res) => { commit(initial()); res.json(snapshot()); });
 app.use("/api", (_req, res) => res.status(404).json({ error: "Endpoint not found." }));
 app.use(express.static(path.join(root, "public"), { etag: false, maxAge: 0 }));
 app.use((err, _req, res, _next) => {
+  if (err instanceof core.HttpError) return res.status(err.status).json({ error: err.message });
+  if (err.status === 413) return res.status(413).json({ error: "That request is too large." });
+  if (err.status === 400 || err.type === "entity.parse.failed") return res.status(400).json({ error: "Invalid JSON request." });
   log.error(err);
-  res.status(err.status === 400 ? 400 : 500).json({ error: err.status === 400 ? "Invalid JSON request." : "Unable to save or load incident state. Please try again." });
+  res.status(500).json({ error: "Unable to save or load state. Please try again." });
 });
-const timer = setInterval(() => { try { expire(); } catch (error) { log.error(error, "Unable to expire incident"); } }, 1000);
+const timer = setInterval(() => { try { core.expire(); } catch (error) { log.error(error, "Unable to expire incident"); } }, 1000);
 const port = Number(process.env.PORT);
 if (!Number.isInteger(port) || port <= 0) throw new Error("PORT must be set to a valid port.");
 const server = app.listen(port, "0.0.0.0", () => log.info({ port }, "Food Rescue HQ is listening"));
