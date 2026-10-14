@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import express from "express";
-import { registerEstimate, parseEstimate } from "./estimate.js";
+import { registerEstimate, parseEstimate, buildInstruction, reconcileCounts } from "./estimate.js";
 
 const png = "data:image/png;base64,iVBORw0KGgo=";
 const realFetch = globalThis.fetch;
@@ -22,7 +22,27 @@ globalThis.fetch = async (url, opts) => {
 
 const parsed = parseEstimate('x {"items":[{"item":"A","count":2}],"unreadable":false,"overall_note":"n"}');
 assert.equal(parsed.items[0].count, 2);
+assert.equal(parsed.items[0].count_method, "estimated");
 assert.equal(parseEstimate("no json"), null);
+
+// Two counts that roughly agree: keep the larger. Far apart: keep the first, flag low confidence.
+const two = parseEstimate('{"items":[{"item":"Tacos","count":28,"recount":31,"count_method":"rows_by_columns","confidence":"high","note":"5 rows"},' +
+  '{"item":"Chips","count":10,"recount":40,"count_method":"bogus","confidence":"high","note":"pile"},' +
+  '{"item":"Rice","count":"7","recount":"x","confidence":"medium"}],"unreadable":false}');
+assert.deepEqual(two.items.map((i) => [i.item, i.count, i.confidence, i.count_method]),
+  [["Tacos", 31, "high", "rows_by_columns"], ["Chips", 10, "low", "estimated"], ["Rice", 7, "medium", "estimated"]]);
+assert.match(two.items[1].note, /^pile Two counts disagreed \(10 and 40\)/);
+assert.deepEqual(reconcileCounts(30, 30, "high", "n"), { count: 30, confidence: "high", note: "n" });
+assert.equal(reconcileCounts(4, 5, "high", "").count, 5);
+assert.equal(reconcileCounts(1, 2, "high", "").confidence, "low");
+
+// Instruction asks for careful, complete counts and names the expected items.
+const text = buildInstruction([{ item: "Tacos", ordered: 40 }, { item: "Chips", ordered: null }]);
+for (const needle of ["rows_by_columns", "recount", "Count carefully and completely", "ONLY food that is actually visible", "Never default to a small",
+  "much larger than a casual glance", "Ordered items: Tacos (ordered 40), Chips."]) {
+  assert.ok(text.includes(needle), `instruction missing: ${needle}`);
+}
+assert.ok(buildInstruction([]).includes("none were given"));
 
 const app = express();
 registerEstimate(app);
