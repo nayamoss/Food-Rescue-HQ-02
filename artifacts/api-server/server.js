@@ -7,6 +7,7 @@ import pino from "pino";
 import * as core from "./lib/core.js";
 import { registerQuick } from "./lib/quick.js";
 import { registerEstimate } from "./lib/estimate.js";
+import { registerTranscribe } from "./lib/transcribe.js";
 import { registerAgent } from "./lib/agent.js";
 
 const log = pino();
@@ -61,6 +62,7 @@ app.use((req, _res, next) => {
 });
 app.disable("x-powered-by");
 registerEstimate(app); // before the global json parser: has its own larger body limit
+registerTranscribe(app); // before the global json parser: reads the raw audio upload itself
 if (voice?.registerVoice) voice.registerVoice(app, voiceCore); // Twilio voice webhooks (own urlencoded parser)
 if (sms?.registerSms) sms.registerSms(app, voiceCore); // Twilio messaging webhook (own urlencoded parser)
 app.use(express.json({ limit: "64kb" }));
