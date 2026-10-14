@@ -383,7 +383,8 @@ export function sendOffers(body) {
   let offers = state.offers
     .map((o) => (adjust.has(o.id) && o.status === "proposed" ? { ...o, portions: adjust.get(o.id) } : o))
     .filter((o) => o.portions > 0);
-  const pool = state.volunteers.filter((v) => v.optedIn);
+  // Volunteers who can be phoned go first.
+  const pool = state.volunteers.filter((v) => v.optedIn).sort((a, b) => Number(Boolean(b.phone)) - Number(Boolean(a.phone)));
   let turn = offers.filter((o) => o.volunteerId).length;
   const volunteers = state.volunteers.map((v) => ({ ...v }));
   const texts = [];
@@ -438,8 +439,25 @@ export function respondToOffer(offerId, action) {
     setOffer(offerId, "accepted", { from: ["offered"], volunteerStatus: "accepted",
       feedText: (o, p, v) => `${who(v)} accepted ${o.portions} ${o.item} for ${p.name}.` });
   } else {
+    // Hand the same offer to the next free volunteer (phone first) instead of giving up.
+    const o = offerById(offerId);
+    if (o && o.status === "offered") {
+      const busy = new Set(state.offers.filter((x) => ["offered", "accepted", "picked_up"].includes(x.status) && x.id !== o.id).map((x) => x.volunteerId));
+      const next = state.volunteers
+        .filter((v) => v.optedIn && v.id !== o.volunteerId && !busy.has(v.id) && !(o.declinedBy || []).includes(v.id))
+        .sort((a, b) => Number(Boolean(b.phone)) - Number(Boolean(a.phone)))[0];
+      if (next) {
+        const prev = volunteerById(o.volunteerId);
+        const stamp = new Date().toISOString();
+        const offers = state.offers.map((x) => (x.id === o.id ? { ...x, volunteerId: next.id, declinedBy: [...(x.declinedBy || []), o.volunteerId], updatedAt: stamp } : x));
+        const volunteers = state.volunteers.map((v) => (v.id === o.volunteerId ? { ...v, status: "declined" } : v.id === next.id ? { ...v, status: "asked" } : v));
+        pendingCalls.push(o.id);
+        commit({ ...state, offers, volunteers, feed: withFeed([`${who(prev)} can't take ${o.portions} ${o.item}. Asking ${next.name} instead.`]) });
+        return snapshot();
+      }
+    }
     setOffer(offerId, "declined", { from: ["offered"], volunteerStatus: "declined",
-      feedText: (o, p, v) => `${who(v)} declined ${o.portions} ${o.item} for ${p.name}.` });
+      feedText: (o, p, v) => `${who(v)} declined ${o.portions} ${o.item} for ${p.name}. No other volunteer is free.` });
   }
   return snapshot();
 }

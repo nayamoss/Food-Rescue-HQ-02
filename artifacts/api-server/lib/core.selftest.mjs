@@ -132,6 +132,7 @@ try {
   // ---- reset keeps user data; reset-all restores seeds -----------------------
   const keptVols = core.snapshot().volunteers.map((v) => v.id).sort();
   const keptPlaces = core.snapshot().places.map((p) => p.id).sort();
+  const phonesBefore = core.internalState().volunteers.map((v) => [v.id, v.phone]);
   s = core.reset();
   assert.equal(s.event, null);
   assert.equal(s.report, null);
@@ -141,7 +142,7 @@ try {
   assert.deepEqual(s.volunteers.map((v) => v.id).sort(), keptVols);
   assert.deepEqual(s.places.map((p) => p.id).sort(), keptPlaces);
   assert.ok(s.volunteers.every((v) => v.status === "ready"));
-  assert.equal(core.volunteerPhone(quinn.id), "+15035550199", "reset keeps real phones");
+  for (const [id, phone] of phonesBefore) assert.equal(core.volunteerPhone(id), phone, "reset keeps real phones");
 
   // deleting a seed volunteer and every place survives a reload (no silent re-seeding)
   for (const p of core.snapshot().places) core.deletePlace(p.id);

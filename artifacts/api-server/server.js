@@ -26,7 +26,7 @@ const voiceCore = {
   getState: () => core.internalState(),
   volunteerPhone: (id) => core.volunteerPhone(id),
   describeOffer: (id) => core.describeOffer(id),
-  respondToOffer: (id, action) => core.respondToOffer(id, action),
+  respondToOffer: (id, action) => { const snap = core.respondToOffer(id, action); Promise.resolve().then(placeCalls).catch(() => {}); return snap; },
   addFeed: (text) => { try { core.postUpdate(text); } catch { /* feed is best effort */ } },
   pickupOffer: (id) => core.pickupOffer(id),
   dropoffOffer: (id) => core.dropoffOffer(id),
@@ -98,7 +98,7 @@ app.patch("/api/event", route(200, (req) => core.patchEvent(req.body)));
 app.post("/api/report", route(201, (req) => core.submitReport(req.body)));
 registerQuick(app, core, placeCalls);
 app.post("/api/offers/send", route(200, (req) => core.sendOffers(req.body), placeCalls));
-app.post("/api/offers/:id/respond", route(200, (req) => core.respondToOffer(req.params.id, req.body?.action)));
+app.post("/api/offers/:id/respond", route(200, (req) => core.respondToOffer(req.params.id, req.body?.action), placeCalls));
 app.post("/api/offers/:id/pickup", route(200, (req) => core.pickupOffer(req.params.id)));
 app.post("/api/offers/:id/dropoff", route(200, (req) => core.dropoffOffer(req.params.id)));
 // Call the volunteer for one offer right now (used by the "Call now" button).
