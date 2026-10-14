@@ -265,14 +265,14 @@ try {
   assert.equal(s.lots[0].status, "unclaimed");
   assert.equal(s.lots[0].label, "Nobody took it");
   assert.equal(s.lots[0].steps[0].state, "failed");
-  assert.ok(s.feed.some((f) => f.text === "Every place said no to 10 Tacos. It is unclaimed." && f.kind === "hq"));
+  assert.ok(s.feed.some((f) => f.text === "Every place said no to 10 tacos. It is unclaimed." && f.kind === "hq"));
   assert.equal(s.incident.status, "in_progress", "soda still open");
   assert.equal(core.checkTimeouts(Date.now() + 5 * 60000), false, "not yet");
   assert.equal(core.checkTimeouts(Date.now() + 10 * 60000 + 1000), true);
   s = core.snapshot();
   assert.equal(s.lots[1].status, "unclaimed");
   assert.ok(s.offers.filter((o) => o.lotId === soda.id).every((o) => o.status === "unclaimed"));
-  assert.ok(s.feed.some((f) => f.text === "No place said yes to 5 Soda within 10 minutes. It is unclaimed."));
+  assert.ok(s.feed.some((f) => f.text === "No place said yes to 5 soda within 10 minutes. It is unclaimed."));
   assert.equal(s.incident.status, "expired", "every lot unclaimed or delivered: rescue done");
   assert.ok(s.feed.some((f) => f.text === "Rescue finished: 0 of 15 portions delivered."));
   assert.equal(core.placeAnswer(soda.places[0].offerId, "accept"), "closed", "a yes after the window is too late");
@@ -287,13 +287,27 @@ try {
   core.setPlaceTimeoutMs(10 * 60000);
   core.takePendingCalls();
 
-  // no place with a phone: the lot is unclaimed straight away and HQ is told
+  // no place with a phone: outreach refuses (409) and nothing changes; the event and count stay
   for (const p of core.snapshot().places) core.patchPlace(p.id, { phone: "" });
   core.createEvent({ name: "Dinner", venue: "Annex", items: [{ item: "Rice", ordered: 10 }], goodForMinutes: 60 });
   core.submitReport({ items: [{ item: "Rice", left: 4 }] });
-  s = core.startPlaceOutreach({});
-  assert.equal(s.lots[0].status, "unclaimed");
-  assert.ok(s.feed.some((f) => f.text.startsWith("No place with a phone number can take 4 Rice")));
+  const [code, msg] = status(() => core.startPlaceOutreach({}));
+  assert.equal(code, 409);
+  assert.equal(msg, core.NO_PHONE);
+  s = core.snapshot();
+  assert.equal(s.lots[0].status, "proposed");
+  assert.equal(s.event.name, "Dinner");
+  assert.equal(s.report.items[0].left, 4);
+  assert.equal(s.incident.status, "open");
+  assert.deepEqual(core.takePendingCalls(), []);
+  // demo simulate moves the lot forward without any phones and never calls
+  s = core.demoSimulate({ lotId: s.lots[0].id, action: "place_yes" });
+  assert.equal(s.lots[0].status, "waiting_volunteer");
+  s = core.demoSimulate({ lotId: s.lots[0].id, action: "volunteer_accept" });
+  assert.equal(s.lots[0].status, "on_the_way");
+  s = core.demoSimulate({ lotId: s.lots[0].id, action: "delivered" });
+  assert.equal(s.lots[0].status, "delivered");
+  assert.equal(s.incident.status, "resolved");
   assert.deepEqual(core.takePendingCalls(), []);
   assert.equal(status(() => core.deleteVolunteer("nope"))[0], 404);
   assert.equal(status(() => core.deletePlace("nope"))[0], 404);
