@@ -23,11 +23,20 @@ const voiceCore = {
   describeOffer: (id) => core.describeOffer(id),
   respondToOffer: (id, action) => core.respondToOffer(id, action),
   addFeed: (text) => { try { core.postUpdate(text); } catch { /* feed is best effort */ } },
+  pickupOffer: (id) => core.pickupOffer(id),
+  dropoffOffer: (id) => core.dropoffOffer(id),
 };
+// Optional SMS module (same adapter). Texts and calls are independent and best effort.
+let sms = null;
+try { sms = await import("./lib/sms.js"); } catch { sms = null; }
 async function placeCalls() {
   const ids = core.takePendingCalls();
-  if (!ids.length || typeof voice?.callForOffers !== "function") return;
-  try { await voice.callForOffers(voiceCore, ids); } catch (error) { log.error(error, "Voice call failed"); }
+  if (!ids.length) return;
+  const calls = typeof voice?.callForOffers === "function" ? voice.callForOffers(voiceCore, ids) : null;
+  const texts = typeof sms?.textForOffers === "function" ? sms.textForOffers(voiceCore, ids) : null;
+  const [c, t] = await Promise.allSettled([calls, texts]);
+  if (c.status === "rejected") log.error({ err: c.reason?.name }, "Voice call failed");
+  if (t.status === "rejected") log.error({ err: t.reason?.name }, "Text message failed");
 }
 
 const app = express();
@@ -41,6 +50,7 @@ app.use((req, _res, next) => {
 app.disable("x-powered-by");
 registerEstimate(app); // before the global json parser: has its own larger body limit
 if (voice?.registerVoice) voice.registerVoice(app, voiceCore); // Twilio voice webhooks (own urlencoded parser)
+if (sms?.registerSms) sms.registerSms(app, voiceCore); // Twilio messaging webhook (own urlencoded parser)
 app.use(express.json({ limit: "64kb" }));
 app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
 app.get("/api/healthz", (_req, res) => res.json({ status: "ok" }));
