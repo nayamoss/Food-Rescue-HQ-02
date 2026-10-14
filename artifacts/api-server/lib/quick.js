@@ -46,8 +46,16 @@ export function parseQuick(text) {
 
   // "<number> [unit of] <food words>" chunks, split on commas and "and".
   const chunks = t.split(/,|;|\band\b|\.|\bplus\b/i);
+  // Starting amounts: "started with 400 tacos", "we had 400 tacos", "ordered 400 tacos".
+  const started = [];
+  for (const m of t.matchAll(/\b(?:started with|starting with|began with|we had|had|ordered|we ordered|there were)\s+(\d+)\s+([a-z' -]{2,40}?)(?=,|;|\.| and | but | now | at | in | left| remaining|$)/gi)) {
+    started.push({ item: m[2].trim().toLowerCase(), ordered: Number(m[1]) });
+  }
+  // Remaining amounts with no item named: "100 left", "100 are left now", "100 remaining".
+  const bareLeft = [...t.matchAll(/(?:^|[,;.]|\band\b|\bbut\b|\bnow\b)\s*(?:we have|there are|there is|only|about)?\s*(\d+)\s+(?:are |is |of them |of those )?(?:left|remaining|still here|to give|available)\b/gi)].map((m) => Number(m[1]));
   for (const chunk of chunks) {
-    const m = chunk.trim().match(/^(?:about|around|roughly|maybe|we have|there are|there is|got)?\s*(\d+|[a-z]+)\s+(.+)$/i);
+    if (/\b(started with|starting with|began with|we had|ordered|there were)\b/i.test(chunk) && !/\b(left|remaining|available)\b/i.test(chunk)) continue;
+    const m = chunk.trim().match(/^(?:now|then)?\s*(?:about|around|roughly|maybe|we have|we now have|there are|there is|there are now|only|got)?\s*(?:about|around|only)?\s*(\d+|[a-z]+)\s+(.+)$/i);
     if (!m) continue;
     const n = toNumber(m[1]);
     if (!n || n > 100000) continue;
@@ -55,8 +63,27 @@ export function parseQuick(text) {
     const unit = rest.match(UNITS);
     rest = rest.replace(UNITS, "");
     rest = rest.split(STOP)[0].replace(/[^a-z' -]/gi, " ").replace(/\s+/g, " ").trim();
-    if (!rest || /^(minutes?|mins?|hours?|hrs?)$/i.test(rest)) continue;
+    if (!rest || /^(minutes?|mins?|hours?|hrs?|are|is|of|them|those|now|left|remaining|still|here|available)$/i.test(rest)) continue;
     out.items.push({ item: rest.toLowerCase(), left: n, unit: unit ? unit[1].toLowerCase().replace(/s$/, "") + "s" : "portions" });
+  }
+  // The same item said twice ("50 sandwiches ... 10 sandwiches left"): the first is the start, the last is what is left.
+  const merged = [];
+  for (const it of out.items) {
+    const prev = merged.find((m) => m.item === it.item);
+    if (prev) { prev.ordered = Math.max(prev.ordered || prev.left, it.left); prev.left = it.left; prev.unit = it.unit; }
+    else merged.push({ ...it });
+  }
+  out.items = merged;
+  // Attach starting amounts to the matching item; a "100 left" with no item goes to the started item in order.
+  let k = 0;
+  for (const st of started) {
+    let it = out.items.find((i) => i.item === st.item || i.item.includes(st.item) || st.item.includes(i.item));
+    if (!it) {
+      const left = bareLeft[k] !== undefined ? bareLeft[k++] : st.ordered;
+      it = { item: st.item, left, unit: "portions" };
+      out.items.push(it);
+    }
+    it.ordered = Math.max(st.ordered, it.left);
   }
   return out;
 }
@@ -80,8 +107,8 @@ async function parseWithModel(text) {
   const model = process.env.OPENAI_AGENT_MODEL || process.env.OPENAI_VISION_MODEL;
   if (!key || !model) return null;
   const instruction = `Turn this food rescue report into JSON only, no other text:
-{"eventName": string, "venue": string, "goodForMinutes": number|null, "items": [{"item": string, "left": number, "unit": string}]}
-Rules: use only facts in the report; item names short and plain (for example "Tacos"); left is a whole number; unit like "portions", "bags", "trays"; if a time window is not stated use null. Report: ${JSON.stringify(text)}`;
+{"eventName": string, "venue": string, "goodForMinutes": number|null, "items": [{"item": string, "ordered": number|null, "left": number, "unit": string}]}
+Rules: use only facts in the report; item names short and plain (for example "Tacos"); "ordered" is what the event started with or had ("we started with 400 tacos", "we ordered 400", "we had 400"), "left" is what remains now ("100 left", "100 remaining", "100 to give away"); if only a starting amount is given, left equals it; if only a remaining amount is given, ordered is null; both are whole numbers; unit like "portions", "bags", "trays"; if a time window is not stated use null. Report: ${JSON.stringify(text)}`;
   try {
     const r = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -95,7 +122,11 @@ Rules: use only facts in the report; item names short and plain (for example "Ta
     const j = firstJson(textOut);
     if (!j || !Array.isArray(j.items)) return null;
     const items = j.items
-      .map((i) => ({ item: String(i.item || "").trim().toLowerCase().slice(0, 100), left: Math.max(0, Math.round(Number(i.left))), unit: String(i.unit || "portions").slice(0, 30) }))
+      .map((i) => {
+        const left = Math.max(0, Math.round(Number(i.left)));
+        const ordered = Number.isFinite(Number(i.ordered)) && i.ordered !== null ? Math.max(left, Math.round(Number(i.ordered))) : undefined;
+        return { item: String(i.item || "").trim().toLowerCase().slice(0, 100), left, unit: String(i.unit || "portions").slice(0, 30), ...(ordered ? { ordered } : {}) };
+      })
       .filter((i) => i.item && Number.isFinite(i.left) && i.left > 0);
     if (!items.length) return null;
     const g = Number(j.goodForMinutes);
@@ -122,9 +153,9 @@ export function registerQuick(app, core, after) {
         const venue = parsed.venue || "Event venue";
         const name = parsed.eventName || `Leftovers at ${venue}`;
         core.createEvent({ name, venue, date: new Date().toISOString().slice(0, 10), goodForMinutes: goodFor,
-          items: parsed.items.map((i) => ({ item: i.item, ordered: i.left })), notes: `Reported by voice: ${text.slice(0, 300)}` });
+          items: parsed.items.map((i) => ({ item: i.item, ordered: i.ordered || i.left })), notes: `Reported by voice: ${text.slice(0, 300)}` });
       }
-      core.submitReport({ items: parsed.items.map((i) => ({ item: i.item, left: i.left, unit: i.unit, source: "manual" })) });
+      core.submitReport({ items: parsed.items.map((i) => ({ item: i.item, left: i.left, ordered: i.ordered, unit: i.unit, source: "manual" })) });
       // Stage 1: call the nonprofits. Volunteers are only called once a place says yes.
       const snap = core.startPlaceOutreach({});
       res.json({ ...snap, quick: { understood: parsed, goodForMinutes: goodFor } });
