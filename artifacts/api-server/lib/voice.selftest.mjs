@@ -28,7 +28,7 @@ assert.ok(x.includes("Arena &amp; Co"));
 
 x = await run("/voice/answer", { volunteerId: "v1", offerId: "o1" }, { Digits: "1" });
 assert.deepEqual(calls.at(-1), ["o1", "accept"]);
-assert.match(x, /6:30 PM/);
+assert.match(x, /within 30 minutes/);
 assert.ok(x.includes("Alex &lt;Rivera&gt;"));
 x = await run("/voice/answer", { volunteerId: "v1", offerId: "o1" }, { Digits: "2" });
 assert.deepEqual(calls.at(-1), ["o1", "decline"]);

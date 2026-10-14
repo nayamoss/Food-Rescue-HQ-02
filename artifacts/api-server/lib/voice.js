@@ -51,7 +51,7 @@ export function registerVoice(app, core) {
       const action = digit === "1" ? "accept" : "decline";
       try { core?.respondToOffer?.(id, action); } catch { /* degrade */ }
       const msg = digit === "1"
-        ? `Thank you ${d.volunteerName}. Please pick up the food ${d.deadlineText ? "by " + d.deadlineText : `within ${d.minutes} minutes`}. Goodbye.`
+        ? `Thank you ${d.volunteerName}. Please pick up the food within ${d.minutes ?? "the next few"} minutes. Goodbye.`
         : "Understood. Thank you.";
       return send(res, twiml(`${say(msg)}<Hangup/>`));
     }
