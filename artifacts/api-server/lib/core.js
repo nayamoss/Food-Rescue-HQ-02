@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const dataDir = path.join(root, "data");
+// DATA_DIR lets tests (or a host) keep state somewhere other than <repo>/data.
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, "data");
 const stateFile = path.join(dataDir, "state.json");
 mkdirSync(dataDir, { recursive: true });
 
@@ -16,6 +17,12 @@ const VOLUNTEER_STATUSES = ["ready", "asked", "accepted", "declined", "on_the_wa
 const SOURCES = ["manual", "photo", "photo_edited"];
 const RESCUED = ["picked_up", "dropped_off"];
 const CLAIMED = ["accepted", ...RESCUED];
+const PLACE_TYPES = ["shelter", "kitchen", "food bank"];
+const FOOD_KINDS = ["prepared", "packaged", "drinks"];
+const BUSY = ["offered", "accepted", "picked_up"]; // a volunteer holding one of these cannot be removed
+const E164 = /^\+[1-9]\d{7,14}$/;
+// Old demo placeholders (+1 202 555 xxxx). Never dial or keep these.
+const PLACEHOLDER_PHONE = /^\+1202555\d{4}$/;
 
 const seedPlaces = () => [
   { id: "p1", name: "Partner shelter A", type: "shelter", distanceMiles: 2, capacity: 150, accepts: ["prepared", "packaged", "drinks"] },
@@ -44,13 +51,12 @@ function normalise(raw) {
   s.event = raw.event ?? null;
   s.report = raw.report ?? null;
   s.offers = Array.isArray(raw.offers) ? raw.offers : [];
-  s.places = Array.isArray(raw.places) && raw.places.length ? raw.places : seedPlaces();
+  // Older saved state has no places key: give it the seeds. An empty list the user made stays empty.
+  s.places = Array.isArray(raw.places) ? raw.places : seedPlaces();
   const kept = raw.volunteers.filter((v) => v && !OLD_FAKE.has(v.name));
-  for (const seed of seedVolunteers()) {
-    if (!kept.some((v) => v.id === seed.id || v.name === seed.name)) kept.push(seed);
-  }
   s.volunteers = kept.map((v) => ({
     ...v,
+    phone: typeof v.phone === "string" && E164.test(v.phone) && !PLACEHOLDER_PHONE.test(v.phone) ? v.phone : "",
     optedIn: v.optedIn !== false,
     status: VOLUNTEER_STATUSES.includes(v.status) ? v.status : "ready",
   }));
@@ -150,7 +156,13 @@ function journeyStep() {
   return "outreach";
 }
 
-export function snapshot() {
+// The browser never sees a full phone number: only whether one is set and its last 4 digits.
+const maskVolunteer = ({ phone, ...v }) => {
+  const set = typeof phone === "string" && phone.length > 0;
+  return { ...v, phoneSet: set, phoneLast4: set ? phone.slice(-4) : "" };
+};
+
+function fullSnapshot() {
   const incident = state.incident;
   const total = incident?.total ?? 0;
   const assignments = derivedAssignments();
@@ -158,12 +170,24 @@ export function snapshot() {
   const rescued = sum(assignments, (a) => a.pickedUp);
   return {
     ...state,
+    volunteers: state.volunteers.map((v) => ({ ...v })),
     incident: incident ? { ...incident, assignments } : null,
     journeyStep: journeyStep(),
     summary: summary(),
     totals: { total, unclaimed: Math.max(0, total - assigned), claimed: Math.max(0, assigned - rescued), rescued },
   };
 }
+
+// Public snapshot: safe to send to the browser (GET /api/state, SSE, agent).
+export function snapshot() {
+  const snap = fullSnapshot();
+  return { ...snap, volunteers: snap.volunteers.map(maskVolunteer) };
+}
+
+// Server-side only: same shape as snapshot() but with real phone numbers, for voice and sms.
+// Never return this from an HTTP route.
+export const internalState = () => fullSnapshot();
+export const volunteerPhone = (id) => volunteerById(id)?.phone || "";
 
 // ---- commit -----------------------------------------------------------------
 function commit(next) {
@@ -220,7 +244,13 @@ export function postUpdate(text) {
   commit({ ...state, feed: [entry(t, "update"), ...state.feed] });
   return snapshot();
 }
-export function reset() { commit(initial()); return snapshot(); }
+// Clears the event, report, offers, incident and feed. Keeps the volunteers and places the user has.
+export function reset() {
+  commit({ ...initial(), places: state.places, volunteers: state.volunteers.map((v) => ({ ...v, status: "ready" })) });
+  return snapshot();
+}
+// Full reset: back to the seeded places and volunteers (no phones).
+export function resetAll() { commit(initial()); return snapshot(); }
 
 // ---- event ------------------------------------------------------------------
 export function createEvent(body) {
@@ -424,16 +454,153 @@ export function dropoffOffer(offerId) {
   return snapshot();
 }
 
-export function setVolunteerPhone(id, phone) {
+// ---- volunteers -------------------------------------------------------------
+// Feed text and errors never include the phone number itself.
+const PHONE_HELP = "Phone must start with + and the country code, followed by the number (8 to 15 digits in total).";
+function parsePhone(phone, { allowEmpty = false } = {}) {
+  if (allowEmpty && (phone === null || phone === "")) return "";
+  if (typeof phone !== "string") throw bad(PHONE_HELP);
+  const p = phone.replace(/[\s().-]/g, "");
+  if (!E164.test(p)) throw bad(PHONE_HELP);
+  if (PLACEHOLDER_PHONE.test(p)) throw bad("That is a demo placeholder number. Add the volunteer's real phone number.");
+  return p;
+}
+const volunteerName = (v, selfId = null) => {
+  const name = str(v, 80, "Volunteer name", { required: true });
+  if (state.volunteers.some((x) => x.id !== selfId && x.name.toLowerCase() === name.toLowerCase())) {
+    throw conflict(`There is already a volunteer named ${name}.`);
+  }
+  return name;
+};
+
+export function addVolunteer(body) {
+  const b = body ?? {};
+  const v = {
+    id: `v-${randomUUID()}`,
+    name: volunteerName(b.name),
+    phone: b.phone === undefined ? "" : parsePhone(b.phone, { allowEmpty: true }),
+    optedIn: true,
+    status: "ready",
+  };
+  if (b.optedIn !== undefined) {
+    if (typeof b.optedIn !== "boolean") throw bad("optedIn must be true or false.");
+    v.optedIn = b.optedIn;
+  }
+  commit({ ...state, volunteers: [...state.volunteers, v], feed: withFeed(`Added volunteer ${v.name}.`) });
+  return snapshot();
+}
+
+export function patchVolunteer(id, body) {
   const v = volunteerById(id);
   if (!v) throw notFound("That volunteer does not exist.");
-  if (typeof phone !== "string" || !/^\+[1-9]\d{7,14}$/.test(phone.trim())) {
-    throw bad("Phone must be in international format, like +12025550123.");
+  const b = body ?? {};
+  const next = { ...v };
+  const changed = [];
+  if (b.name !== undefined) { next.name = volunteerName(b.name, id); if (next.name !== v.name) changed.push(`renamed to ${next.name}`); }
+  if (b.phone !== undefined) { next.phone = parsePhone(b.phone, { allowEmpty: true }); changed.push(next.phone ? "phone number saved" : "phone number removed"); }
+  if (b.optedIn !== undefined) {
+    if (typeof b.optedIn !== "boolean") throw bad("optedIn must be true or false.");
+    next.optedIn = b.optedIn;
+    changed.push(b.optedIn ? "can be asked to help" : "will not be asked to help");
+  }
+  if (b.name === undefined && b.phone === undefined && b.optedIn === undefined) {
+    throw bad("Send a name, phone or optedIn to update.");
   }
   commit({
     ...state,
-    volunteers: state.volunteers.map((x) => (x.id === id ? { ...x, phone: phone.trim() } : x)),
+    volunteers: state.volunteers.map((x) => (x.id === id ? next : x)),
+    feed: changed.length ? withFeed(`Updated volunteer ${v.name}: ${changed.join(", ")}.`) : state.feed,
+  });
+  return snapshot();
+}
+
+export function deleteVolunteer(id) {
+  const v = volunteerById(id);
+  if (!v) throw notFound("That volunteer does not exist.");
+  if (state.offers.some((o) => o.volunteerId === id && BUSY.includes(o.status))) {
+    throw conflict(`${v.name} is still delivering an offer. Wait until it is dropped off or declined.`);
+  }
+  commit({ ...state, volunteers: state.volunteers.filter((x) => x.id !== id), feed: withFeed(`Removed volunteer ${v.name}.`) });
+  return snapshot();
+}
+
+export function setVolunteerPhone(id, phone) {
+  const v = volunteerById(id);
+  if (!v) throw notFound("That volunteer does not exist.");
+  const p = parsePhone(phone);
+  commit({
+    ...state,
+    volunteers: state.volunteers.map((x) => (x.id === id ? { ...x, phone: p } : x)),
     feed: withFeed(`Saved a phone number for ${v.name}.`),
+  });
+  return snapshot();
+}
+
+// ---- places -----------------------------------------------------------------
+function placeFields(b, { partial, selfId = null }) {
+  const out = {};
+  const has = (k) => b[k] !== undefined;
+  if (!partial || has("name")) {
+    out.name = str(b.name, 120, "Place name", { required: true });
+    if (state.places.some((p) => p.id !== selfId && p.name.toLowerCase() === out.name.toLowerCase())) {
+      throw conflict(`There is already a place named ${out.name}.`);
+    }
+  }
+  if (!partial || has("type")) {
+    if (!PLACE_TYPES.includes(b.type)) throw bad("Type must be shelter, kitchen or food bank.");
+    out.type = b.type;
+  }
+  if (!partial || has("distanceMiles")) {
+    if (typeof b.distanceMiles !== "number" || !Number.isFinite(b.distanceMiles) || b.distanceMiles < 0 || b.distanceMiles > 1000) {
+      throw bad("Distance must be a number of miles from 0 to 1000.");
+    }
+    out.distanceMiles = Math.round(b.distanceMiles * 10) / 10;
+  }
+  if (!partial || has("capacity")) out.capacity = count(b.capacity, "Capacity", { min: 1 });
+  if (!partial || has("accepts")) {
+    if (!Array.isArray(b.accepts) || !b.accepts.length || b.accepts.some((k) => !FOOD_KINDS.includes(k))) {
+      throw bad("Accepts must list one or more of: prepared, packaged, drinks.");
+    }
+    out.accepts = FOOD_KINDS.filter((k) => b.accepts.includes(k));
+  }
+  if (has("address")) out.address = str(b.address, 200, "Address");
+  return out;
+}
+
+export function addPlace(body) {
+  const fields = placeFields(body ?? {}, { partial: false });
+  const place = { id: `p-${randomUUID()}`, ...fields, address: fields.address ?? "" };
+  commit({ ...state, places: [...state.places, place], feed: withFeed(`Added place ${place.name}.`) });
+  return snapshot();
+}
+
+export function patchPlace(id, body) {
+  const p = placeById(id);
+  if (!p) throw notFound("That place does not exist.");
+  const fields = placeFields(body ?? {}, { partial: true, selfId: id });
+  if (!Object.keys(fields).length) throw bad("Send at least one place field to update.");
+  commit({
+    ...state,
+    places: state.places.map((x) => (x.id === id ? { ...x, ...fields } : x)),
+    feed: withFeed(`Updated place ${fields.name && fields.name !== p.name ? `${p.name} (now ${fields.name})` : p.name}.`),
+  });
+  return snapshot();
+}
+
+export function deletePlace(id) {
+  const p = placeById(id);
+  if (!p) throw notFound("That place does not exist.");
+  if (state.offers.some((o) => o.placeId === id && o.status !== "proposed")) {
+    throw conflict(`${p.name} already has offers sent to it, so it cannot be removed right now.`);
+  }
+  const dropped = state.offers.filter((o) => o.placeId === id);
+  const texts = [`Removed place ${p.name}.`];
+  if (dropped.length) texts.push(`${sum(dropped, (o) => o.portions)} proposed portions for ${p.name} no longer have a place.`);
+  commit({
+    ...state,
+    places: state.places.filter((x) => x.id !== id),
+    offers: state.offers.filter((o) => o.placeId !== id),
+    feed: withFeed(texts),
   });
   return snapshot();
 }
