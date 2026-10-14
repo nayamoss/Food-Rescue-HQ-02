@@ -456,11 +456,20 @@ export function dropoffOffer(offerId) {
 
 // ---- volunteers -------------------------------------------------------------
 // Feed text and errors never include the phone number itself.
-const PHONE_HELP = "Phone must start with + and the country code, followed by the number (8 to 15 digits in total).";
+const PHONE_HELP = "Enter a 10-digit US phone number, like 762 235 7374.";
+// US numbers can be typed any way: 7622357374, (762) 235-7374, 1 762 235 7374 or +17622357374.
+function normalizePhone(raw) {
+  const t = raw.trim();
+  if (t.startsWith("+")) return "+" + t.slice(1).replace(/\D/g, "");
+  const d = t.replace(/\D/g, "");
+  if (d.length === 10) return "+1" + d;
+  if (d.length === 11 && d.startsWith("1")) return "+" + d;
+  return "+" + d;
+}
 function parsePhone(phone, { allowEmpty = false } = {}) {
   if (allowEmpty && (phone === null || phone === "")) return "";
   if (typeof phone !== "string") throw bad(PHONE_HELP);
-  const p = phone.replace(/[\s().-]/g, "");
+  const p = normalizePhone(phone);
   if (!E164.test(p)) throw bad(PHONE_HELP);
   if (PLACEHOLDER_PHONE.test(p)) throw bad("That is a demo placeholder number. Add the volunteer's real phone number.");
   return p;

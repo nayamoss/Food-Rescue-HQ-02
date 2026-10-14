@@ -45,7 +45,9 @@ try {
 
   assert.equal(status(() => core.addVolunteer({}))[0], 400);
   assert.equal(status(() => core.addVolunteer({ name: "x".repeat(81) }))[0], 400);
-  assert.equal(status(() => core.addVolunteer({ name: "Ann", phone: "4155552671" }))[0], 400);
+  assert.equal(status(() => core.addVolunteer({ name: "Ann", phone: "12345" }))[0], 400, "too short rejected");
+  assert.notEqual(status(() => core.addVolunteer({ name: "Ten Digits", phone: "(415) 555-2671" }))[0], 400, "US number without +1 accepted");
+  assert.equal(core.internalState().volunteers.find((v) => v.name === "Ten Digits").phone, "+14155552671", "normalised to +1");
   assert.equal(status(() => core.addVolunteer({ name: "Ann", phone: "+12025550101" }))[0], 400, "placeholder rejected");
   assert.equal(status(() => core.addVolunteer({ name: "Ann", optedIn: "yes" }))[0], 400);
   assert.equal(status(() => core.addVolunteer({ name: "riley park" }))[0], 409, "duplicate name");
