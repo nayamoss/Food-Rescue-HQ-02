@@ -1065,9 +1065,10 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
         const res = await fetch(`${apiBase}/api/transcribe`, { method: 'POST', body: fd, signal: AbortSignal.any([AbortSignal.timeout(45000), lifecycle.signal]) });
         let data = null;
         try { data = await res.json(); } catch { /* not JSON */ }
-        if (res.ok && typeof data?.text === 'string') text = data.text.trim();
+        if (res.ok && typeof data?.text === 'string' && data.text.trim()) text = data.text.trim();
+        else if (res.ok) { text = previewText; if (!text) note = (typeof data?.message === 'string' && data.message) || 'I could not hear that. Try again, or type it.'; }
         else if (res.status === 404 && (!data || data.error === MISSING)) { text = previewText; if (!text) note = 'Voice notes are not on this server yet. Type your message instead.'; }
-        else note = (typeof data?.error === 'string' && data.error) || 'I could not turn that into text. Try again, or type it.';
+        else note = (typeof data?.error === 'string' && data.error) || (typeof data?.message === 'string' && data.message) || 'I could not turn that into text. Try again, or type it.';
       } catch { text = previewText; if (!text) note = 'Could not reach HQ with your voice note. Try again, or type it.'; }
       if (!text && !note) note = 'I did not catch any words. Try again a little closer to the phone.';
     }

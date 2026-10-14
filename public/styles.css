@@ -358,3 +358,4 @@ kbd { font: inherit; font-size: 13px; background: var(--card); border-radius: 6p
 ::-webkit-scrollbar-thumb { background-color: rgba(42, 24, 56, 0.22); border-radius: 9999px; }
 ::-webkit-scrollbar-thumb:hover { background-color: rgba(42, 24, 56, 0.45); }
 html, body { background-color: var(--page, #FBE8D6); }
+.rc[data-urg="done"] .rc-chip { display: none; }
