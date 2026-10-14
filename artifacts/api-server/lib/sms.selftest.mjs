@@ -31,8 +31,8 @@ const core = {
 };
 
 // helpers
-assert.equal(phoneDigits("+1 (202) 555-0101"), "12025550101");
-assert.equal(phoneDigits("2025550101"), "12025550101");
+assert.equal(phoneDigits("+1 (202) 555-0101"), "14155550101");
+assert.equal(phoneDigits("4155550101"), "14155550101");
 assert.equal(parseCommand(" yes! "), "accept");
 assert.equal(parseCommand("picked up"), "pickup");
 assert.equal(parseCommand("maybe"), null);
