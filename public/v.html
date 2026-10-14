@@ -10,39 +10,43 @@
 <body>
 <main class="v" id="v"><p>Loading your pickup…</p></main>
 <script>
+// Volunteer page: one big Accept, then one big Delivered. Delivered is the volunteer's confirmation.
 const root = document.getElementById('v');
 const id = decodeURIComponent((location.pathname.match(/\/v\/([^/?#]+)/) || [])[1] || new URLSearchParams(location.search).get('id') || '');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const clock = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 let state = null, busy = false, msg = '';
-const WORD = { offered: 'Waiting for your answer', accepted: 'You said yes', picked_up: 'On the way', dropped_off: 'Dropped off', declined: 'Declined' };
+const WORD = { offered: ['purple', 'HQ is asking you'], accepted: ['purple', 'You said yes. On your way'], picked_up: ['purple', 'On the way'], dropped_off: ['green', 'Delivered'], delivered: ['green', 'Delivered'], declined: ['grey', 'You said no'] };
+const rank = { offered: 0, accepted: 1, picked_up: 2, dropped_off: 3, delivered: 3, declined: 4 };
 function render() {
-  if (!state) { root.innerHTML = `<p>${esc(msg || 'Loading your pickup…')}</p>`; return; }
+  if (!state) { root.innerHTML = `<h1>Food Rescue HQ</h1><p class="rc-line">${esc(msg || 'Loading your pickup…')}</p>`; return; }
   const vol = (state.volunteers || []).find((v) => String(v.id) === id);
   if (!vol) { root.innerHTML = '<h1>Food Rescue HQ</h1><div class="rc-cardm"><p>We could not find this volunteer link. Ask the organizer for a new one.</p></div>'; return; }
-  const mine = (state.offers || []).filter((o) => o.volunteerId === id && o.status !== 'proposed');
-  const rank = { offered: 0, accepted: 1, picked_up: 2, dropped_off: 3, declined: 4 };
+  const mine = (state.offers || []).filter((o) => o.volunteerId === id && o.status !== 'proposed' && rank[o.status] !== undefined);
   const o = [...mine].sort((a, b) => rank[a.status] - rank[b.status])[0];
   let body;
-  if (!o) body = '<div class="rc-cardm"><h3>Nothing to pick up right now</h3><p class="rc-line">Stay close. HQ will ask you when food is ready.</p></div>';
+  if (!o) body = '<div class="rc-cardm"><h3>Nothing to pick up right now</h3><p class="rc-line">Keep this page open. HQ will call you when food is ready.</p></div>';
   else {
     const p = (state.places || []).find((x) => x.id === o.placeId);
     const e = state.event || {};
     const by = state.incident?.deadline ? clock(state.incident.deadline) : '';
-    const b = (cls, path, payload, label) => `<button type="button" class="rc-btn ${cls}" data-path="${esc(path)}" data-body="${esc(payload)}"${busy ? ' disabled' : ''}>${label}</button>`;
-    const base = `/api/offers/${encodeURIComponent(o.id)}`;
-    const actions = o.status === 'offered' ? b('rc-accept', `${base}/respond`, '{"action":"accept"}', 'Accept') + b('rc-decline', `${base}/respond`, '{"action":"decline"}', 'Decline')
-      : o.status === 'accepted' ? b('rc-primary', `${base}/pickup`, '{}', 'Mark picked up')
-      : o.status === 'picked_up' ? b('rc-primary', `${base}/dropoff`, '{}', 'Mark dropped off') : '';
-    const thanks = o.status === 'dropped_off' ? '<p>Thank you. That food has a home.</p>' : o.status === 'declined' ? '<p>No problem. HQ will ask someone else.</p>' : '';
-    body = `<div class="rc-cardm"><span class="rc-stt ${esc(o.status)}" style="margin-left:0;justify-self:start">${esc(WORD[o.status])}</span>
-      <h3>${esc(o.portions)} ${esc(o.item)}</h3>
-      <p class="rc-kv"><span>Pick up from</span><b>${esc(e.venue || '')}</b></p>
-      <p class="rc-kv"><span>Take to</span><b>${esc(p?.name || 'a partner')}</b></p>
+    const [tone, word] = WORD[o.status] || ['grey', ''];
+    const off = busy ? ' disabled' : '';
+    const actions = o.status === 'offered'
+      ? `<button type="button" class="rc-btn rc-big rc-accept" data-do="accept"${off}>Accept</button><button type="button" class="rc-link" data-do="decline"${off}>I can’t take it</button>`
+      : ['accepted', 'picked_up'].includes(o.status)
+        ? `<p class="rc-line">Tap when the food is with ${esc(p?.name || 'the nonprofit')}.</p><button type="button" class="rc-btn rc-big rc-delivered" data-do="delivered"${off}>Delivered</button>` : '';
+    const thanks = ['dropped_off', 'delivered'].includes(o.status) ? '<p>Thank you. That food has a home.</p>' : o.status === 'declined' ? '<p>No problem. HQ will ask someone else.</p>' : '';
+    body = `<div class="rc-cardm"><span class="rc-dot ${tone}">${esc(word)}</span>
+      <h3>${esc(o.portions)} ${esc(String(o.item || '').toLowerCase())}</h3>
+      <p class="rc-kv"><span>Pick up from</span><b>${esc(e.venue || 'the event')}</b></p>
+      <p class="rc-kv"><span>Take to</span><b>${esc(p?.name || 'a nonprofit')}</b></p>
+      ${p?.address ? `<p class="rc-kv"><span>Address</span><b>${esc(p.address)}</b></p>` : ''}
       ${by ? `<p class="rc-kv"><span>Get it there by</span><b>${esc(by)}</b></p>` : ''}
-      ${thanks}${actions ? `<div class="rc-actions">${actions}</div>` : ''}</div>`;
+      ${thanks}${actions}</div>`;
+    root.dataset.offer = o.id;
   }
-  root.innerHTML = `<h1>Hi ${esc(vol.name.split(' ')[0])}</h1>${msg ? `<p class="rc-warn" role="alert">${esc(msg)}</p>` : ''}${body}`;
+  root.innerHTML = `<h1>Hi ${esc(String(vol.name || '').split(' ')[0])}</h1>${msg ? `<p class="rc-warn" role="alert">${esc(msg)}</p>` : ''}${body}`;
 }
 async function load() {
   if (busy) return;
@@ -53,16 +57,28 @@ async function load() {
   } catch { if (!state) msg = 'We could not reach HQ. Check your connection.'; }
   render();
 }
+async function post(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  let data = null; try { data = await res.json(); } catch {}
+  return { res, data, missing: res.status === 404 && (!data || data.error === 'Endpoint not found.') };
+}
 root.addEventListener('click', async (ev) => {
-  const btn = ev.target.closest('[data-path]');
-  if (!btn || busy) return;
+  const btn = ev.target.closest('[data-do]');
+  const offer = root.dataset.offer;
+  if (!btn || busy || !offer) return;
   busy = true; msg = ''; render();
+  const base = `/api/offers/${encodeURIComponent(offer)}`;
   try {
-    const res = await fetch(btn.dataset.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: btn.dataset.body });
-    if (!res.ok) { let d = {}; try { d = await res.json(); } catch {} msg = res.status === 404 ? 'HQ cannot do that yet.' : (d.error || 'That did not work. Please try again.'); }
-    else state = await res.json();
+    let out;
+    if (btn.dataset.do === 'delivered') {
+      out = await post(`${base}/delivered`);
+      if (out.missing) out = await post(`${base}/dropoff`); // older servers only know "dropoff"
+    } else out = await post(`${base}/respond`, { action: btn.dataset.do });
+    if (!out.res.ok) msg = out.missing ? 'HQ cannot record that yet. Call the organizer.' : (out.data?.error || 'That did not work. Please try again.');
+    else if (out.data && Array.isArray(out.data.volunteers)) state = out.data;
   } catch { msg = 'We could not reach HQ. Please try again.'; }
   busy = false; render();
+  if (!msg) load();
 });
 load(); setInterval(load, 3000);
 </script>
