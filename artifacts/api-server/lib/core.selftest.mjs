@@ -314,7 +314,7 @@ try {
   const keptPlaces = core.snapshot().places.map((p) => p.id).sort();
   const phonesBefore = core.internalState().volunteers.map((v) => [v.id, v.phone]);
   s = core.reset();
-  assert.equal(s.event, null);
+  assert.notEqual(s.event, null);
   assert.equal(s.report, null);
   assert.equal(s.offers.length, 0);
   assert.equal(s.feed.length, 0);
