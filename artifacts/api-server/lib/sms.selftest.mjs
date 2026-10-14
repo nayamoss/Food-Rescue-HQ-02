@@ -9,8 +9,8 @@ const fakeApp = { use(prefix, router) {
 const calls = [], feed = [];
 const state = {
   volunteers: [
-    { id: "v1", name: "Alex Rivera", phone: "+14155550101", optedIn: true },
-    { id: "v2", name: "Jordan Lee", phone: "+14155550102", optedIn: true },
+    { id: "v1", name: "Alex Rivera", phone: "+12025550101", optedIn: true },
+    { id: "v2", name: "Jordan Lee", phone: "+12025550102", optedIn: true },
   ],
   offers: [
     { id: "o1", volunteerId: "v1", item: "Tacos", portions: 100, status: "offered", updatedAt: "2026-01-01T00:00:00Z" },
@@ -31,8 +31,8 @@ const core = {
 };
 
 // helpers
-assert.equal(phoneDigits("+1 (202) 555-0101"), "14155550101");
-assert.equal(phoneDigits("4155550101"), "14155550101");
+assert.equal(phoneDigits("+1 (202) 555-0101"), "12025550101");
+assert.equal(phoneDigits("2025550101"), "12025550101");
 assert.equal(parseCommand(" yes! "), "accept");
 assert.equal(parseCommand("picked up"), "pickup");
 assert.equal(parseCommand("maybe"), null);
@@ -57,7 +57,7 @@ assert.equal(sent.length, 1);
 assert.equal(sent[0].url, "https://api.twilio.com/2010-04-01/Accounts/ACtest/Messages.json");
 assert.equal(sent[0].init.headers.Authorization, "Basic " + Buffer.from("ACtest:tok").toString("base64"));
 const form = sent[0].init.body;
-assert.equal(form.get("To"), "+14155550101");
+assert.equal(form.get("To"), "+12025550101");
 assert.equal(form.get("From"), "+15550000000");
 assert.equal(form.get("Body"), "Food Rescue: 100 Tacos from Arena & Co to Partner shelter A. Pick up within 30 min. Reply YES to accept or NO to decline.");
 assert.deepEqual(feed, ["Texted Alex Rivera about 100 Tacos."]);
@@ -75,14 +75,14 @@ const inbound = (body) => new Promise((resolve) => {
   routes["/sms/inbound"]({ body }, res);
 });
 
-let x = await inbound({ From: "+14155550101", Body: "Yes" });
+let x = await inbound({ From: "+12025550101", Body: "Yes" });
 assert.deepEqual(calls.at(-1), ["o1", "accept"]);
 assert.match(x, /^<\?xml[^>]*\?><Response><Message>Thanks Alex Rivera!/);
 assert.ok(x.includes("Partner shelter A"));
 
-x = await inbound({ From: "+14155550101", Body: "PICKED UP" });
+x = await inbound({ From: "+12025550101", Body: "PICKED UP" });
 assert.deepEqual(calls.at(-1), ["o1", "pickup"]);
-x = await inbound({ From: "+14155550101", Body: "done" });
+x = await inbound({ From: "+12025550101", Body: "done" });
 assert.deepEqual(calls.at(-1), ["o1", "dropoff"]);
 assert.match(x, /Delivered!/);
 
@@ -91,7 +91,7 @@ assert.deepEqual(calls.at(-1), ["o2", "decline"]);
 assert.match(x, /Understood/);
 
 const before = calls.length;
-x = await inbound({ From: "+14155550102", Body: "YES" });
+x = await inbound({ From: "+12025550102", Body: "YES" });
 assert.equal(calls.length, before);
 assert.match(x, /no open offer/);
 
@@ -100,7 +100,7 @@ assert.equal(calls.length, before);
 assert.match(x, /do not recognise this number/);
 assert.ok(!x.includes("9998887777"), "reply must not echo the number");
 
-x = await inbound({ From: "+14155550101", Body: "<b>huh</b>" });
+x = await inbound({ From: "+12025550101", Body: "<b>huh</b>" });
 assert.match(x, /did not understand/);
 assert.ok(!x.includes("<b>"));
 

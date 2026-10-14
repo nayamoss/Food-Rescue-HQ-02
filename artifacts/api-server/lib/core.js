@@ -23,9 +23,9 @@ const seedPlaces = () => [
   { id: "p3", name: "Community kitchen", type: "kitchen", distanceMiles: 6, capacity: 100, accepts: ["prepared", "packaged"] },
 ];
 const seedVolunteers = () => [
-  { id: "v1", name: "Alex Rivera", phone: "+12025550101", optedIn: true, status: "ready" },
-  { id: "v2", name: "Jordan Lee", phone: "+12025550102", optedIn: true, status: "ready" },
-  { id: "v3", name: "Sam Taylor", phone: "+12025550103", optedIn: true, status: "ready" },
+  { id: "v1", name: "Alex Rivera", phone: "", optedIn: true, status: "ready" },
+  { id: "v2", name: "Jordan Lee", phone: "", optedIn: true, status: "ready" },
+  { id: "v3", name: "Sam Taylor", phone: "", optedIn: true, status: "ready" },
 ];
 const initial = () => ({
   event: null, report: null, places: seedPlaces(), offers: [], volunteers: seedVolunteers(),
