@@ -1,0 +1,37 @@
+Build a new web app called Food Rescue HQ. Keep it as simple as possible: ONE plain Node.js + Express web app whose dashboard is served at the root "/" and shows in the Preview pane. Do not use a monorepo, pnpm workspaces, artifacts, canvas, or any framework. Plain HTML, CSS and vanilla JS in public/. No database.
+
+PRODUCT: a crisis management app for an absurd crisis: 400 tacos arrived at a conference, no guests showed up, and the food is safe for 45 minutes. Crisis HQ watches a live dashboard. Volunteers will later be texted through Twilio. This first version has no Twilio and no Deepgram.
+
+BUILD:
+1. server.js (Express) serving public/ at "/", listening on process.env.PORT. package.json with "start": "node server.js". Use the Run button's workflow so the Preview opens the dashboard.
+2. State in memory, n every change andloaded on start:
+   - volunteers: seeaceholder phonenumbers (id, name, phone, optedIn)
+   - incident: null ocation, deadline(ISO), status: open | in_progress | resolved | expired | cancelled,
+assignments: [] }
+   - feed: [{ id, at, text }] newest first
+   Derived, never strescued.
+3. Endpoints: GET /api/state, GET /api/stream (server-sent events),
+POST /api/incidents , minutes }, POST/api/demo/fast-forward (deadline = 60 seconds from now), POST
+/api/demo/reset.
+4. A 1 second server timer: if the deadline has passed and food
+remains, set status e.
+5. One dashboard page at "/" showing:
+   - a state label (scued, Expired) as asmall dot plus text
+   - a large mm:ss crowser from thedeadline
+   - counters Total,ed, and a progress bar
+   - a volunteers table (Name, Claimed, Picked up, Status), one
+value per cell
+   - an activity feed
+   - a demo controls "Create sampleincident" (400 tacos, main hall, 45 minutes), "Fast-forward",
+"Reset"
+   - empty state text: "All clear. No surplus food reported."
+   The page uses /appi/state every 3seconds as a backup.
+6. Create .env.examp, TWILIO_AUTH_TOKEN,TWILIO_FROM_NUMBER, DEEPGRAM_API_KEY (empty values).
+
+UI RULES: light grey page, white cards, one green accent #2F6B50. No
+borders, no box-shad, card radius 12pxmax.
+
+DO NOT add login, extra pages, Twilio, Deepgram, or any feature not
+listed.
+
+DONE WHEN: the Previd in the Idle state.Clicking "Create sample incident" shows Urgent with a ticking 45:00 and 400 unclaimed. " then Expired. "Reset" returns to Idle. Restarting keeps the state. Tell me exactly what to click to test it,
