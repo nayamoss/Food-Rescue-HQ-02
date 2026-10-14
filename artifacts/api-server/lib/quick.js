@@ -1,4 +1,4 @@
-// Quick report: one spoken or typed sentence becomes event, report, matched offers and calls.
+// Quick report: one spoken or typed sentence becomes event, report, matched lots, and stage 1 calls to places.
 // Example: "About 100 tacos and 10 sandwiches left at the main hall, good for 45 minutes."
 // Uses OpenAI when configured; otherwise a simple parser handles the common shapes.
 
@@ -105,7 +105,7 @@ Rules: use only facts in the report; item names short and plain (for example "Ta
   }
 }
 
-// core: { snapshot, createEvent, patchEvent, submitReport, sendOffers }, after(): places the calls.
+// core: { snapshot, createEvent, patchEvent, submitReport, startPlaceOutreach }, after(): places the calls.
 export function registerQuick(app, core, after) {
   app.post("/api/quick", async (req, res) => {
     const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
@@ -120,7 +120,8 @@ export function registerQuick(app, core, after) {
       core.createEvent({ name, venue, date: new Date().toISOString().slice(0, 10), goodForMinutes: goodFor,
         items: parsed.items.map((i) => ({ item: i.item, ordered: i.left })), notes: `Reported by voice: ${text.slice(0, 300)}` });
       core.submitReport({ items: parsed.items.map((i) => ({ item: i.item, left: i.left, unit: i.unit, source: "manual" })) });
-      const snap = core.sendOffers({});
+      // Stage 1: call the nonprofits. Volunteers are only called once a place says yes.
+      const snap = core.startPlaceOutreach({});
       res.json({ ...snap, quick: { understood: parsed, goodForMinutes: goodFor } });
       Promise.resolve().then(after).catch(() => {});
     } catch (error) {

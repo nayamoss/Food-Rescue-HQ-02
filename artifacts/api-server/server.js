@@ -31,6 +31,11 @@ const voiceCore = {
   addFeed: (text) => { try { core.postUpdate(text); } catch { /* feed is best effort */ } },
   pickupOffer: (id) => core.pickupOffer(id),
   dropoffOffer: (id) => core.dropoffOffer(id),
+  // Two-stage outreach: a place answers (stage 1), a volunteer confirms delivery (also by calling back).
+  placeAnswer: (id, action) => { const r = core.placeAnswer(id, action); Promise.resolve().then(placeCalls).catch(() => {}); return r; },
+  deliverOffer: (id, opts) => { const snap = core.deliverOffer(id, opts); Promise.resolve().then(placeCalls).catch(() => {}); return snap; },
+  openJobForPhone: (phone) => core.openJobForPhone(phone),
+  callTarget: (id) => core.callTarget(id),
 };
 // Optional SMS module (same adapter). Texts and calls are independent and best effort.
 let sms = null;
@@ -61,7 +66,7 @@ if (sms?.registerSms) sms.registerSms(app, voiceCore); // Twilio messaging webho
 app.use(express.json({ limit: "64kb" }));
 app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
 // Friendly answers when someone opens the Twilio webhook addresses in a browser (Twilio itself uses POST).
-for (const hook of ["/sms/inbound", "/voice/offer", "/voice/answer"]) {
+for (const hook of ["/sms/inbound", "/voice/offer", "/voice/answer", "/voice/inbound", "/voice/delivered"]) {
   app.get(hook, (_req, res) => res.type("text/plain").send("This address is for Twilio. It is working. Texts and calls are sent here with POST."));
 }
 app.get("/api/healthz", (_req, res) => res.json({ status: "ok" }));
@@ -98,11 +103,15 @@ app.post("/api/event", route(201, (req) => core.createEvent(req.body)));
 app.patch("/api/event", route(200, (req) => core.patchEvent(req.body)));
 app.post("/api/report", route(201, (req) => core.submitReport(req.body)));
 registerQuick(app, core, placeCalls);
-app.post("/api/offers/send", route(200, (req) => core.sendOffers(req.body), placeCalls));
+// Stage 1: call every proposed place with a phone. /api/offers/send is the older name for the same step.
+app.post("/api/outreach/places", route(200, (req) => core.startPlaceOutreach(req.body), placeCalls));
+app.post("/api/offers/send", route(200, (req) => core.startPlaceOutreach(req.body), placeCalls));
 app.post("/api/offers/:id/respond", route(200, (req) => core.respondToOffer(req.params.id, req.body?.action), placeCalls));
 app.post("/api/offers/:id/pickup", route(200, (req) => core.pickupOffer(req.params.id)));
-app.post("/api/offers/:id/dropoff", route(200, (req) => core.dropoffOffer(req.params.id)));
-// Call the volunteer for one offer right now (used by the "Call now" button).
+// The volunteer confirms the drop-off. Only this counts as rescued. /dropoff is the older name.
+app.post("/api/offers/:id/delivered", route(200, (req) => core.deliverOffer(req.params.id), placeCalls));
+app.post("/api/offers/:id/dropoff", route(200, (req) => core.deliverOffer(req.params.id), placeCalls));
+// Call whoever is being asked about one offer right now: the place in stage 1, the volunteer in stage 2.
 app.post("/api/offers/:id/call", async (req, res) => {
   const offer = core.getOffer(req.params.id);
   if (!offer) return res.status(404).json({ error: "That offer no longer exists." });
@@ -112,17 +121,19 @@ app.post("/api/offers/:id/call", async (req, res) => {
     if (out?.skipped) return res.status(409).json({ error: "Calls are not set up yet." });
     const r = out?.results?.[0];
     if (r?.ok) return res.json({ ok: true, message: "Calling now. Answer and press 1 to accept." });
-    if (r?.skipped) return res.status(409).json({ error: "Add a real phone number for this volunteer first." });
+    if (r?.skipped && !r.kind) return res.status(409).json({ error: "Nobody needs a call for this offer right now." });
+    if (r?.skipped) return res.status(409).json({ error: `Add a real phone number for this ${r.kind === "place" ? "place" : "volunteer"} first.` });
     return res.status(502).json({ error: "The call did not go through. Check the number and try again." });
   } catch (error) {
     log.error({ err: error?.name }, "Call now failed");
     return res.status(502).json({ error: "The call did not go through. Try again." });
   }
 });
-app.post("/api/volunteers", route(201, (req) => core.addVolunteer(req.body)));
-app.patch("/api/volunteers/:id", route(200, (req) => core.patchVolunteer(req.params.id, req.body)));
+// Adding or editing a volunteer can hand them a lot that is waiting for one, so place any calls after.
+app.post("/api/volunteers", route(201, (req) => core.addVolunteer(req.body), placeCalls));
+app.patch("/api/volunteers/:id", route(200, (req) => core.patchVolunteer(req.params.id, req.body), placeCalls));
 app.delete("/api/volunteers/:id", route(200, (req) => core.deleteVolunteer(req.params.id)));
-app.post("/api/volunteers/:id/phone", route(200, (req) => core.setVolunteerPhone(req.params.id, req.body?.phone)));
+app.post("/api/volunteers/:id/phone", route(200, (req) => core.setVolunteerPhone(req.params.id, req.body?.phone), placeCalls));
 app.post("/api/places", route(201, (req) => core.addPlace(req.body)));
 app.patch("/api/places/:id", route(200, (req) => core.patchPlace(req.params.id, req.body)));
 app.delete("/api/places/:id", route(200, (req) => core.deletePlace(req.params.id)));

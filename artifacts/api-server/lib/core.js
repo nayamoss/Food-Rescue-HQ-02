@@ -15,19 +15,25 @@ const FEED_LIMIT = 200;
 const DEFAULT_WINDOW_MINUTES = 120;
 const VOLUNTEER_STATUSES = ["ready", "asked", "accepted", "declined", "on_the_way", "dropped_off"];
 const SOURCES = ["manual", "photo", "photo_edited"];
-const RESCUED = ["picked_up", "dropped_off"];
-const CLAIMED = ["accepted", ...RESCUED];
+// Only a delivered confirmation counts as rescued.
+const RESCUED = ["dropped_off"];
+const CLAIMED = ["accepted", "picked_up", ...RESCUED];
+// A place said yes to these (stage 2 onward).
+const PLACE_YES = ["place_accepted", "offered", "accepted", "picked_up", "dropped_off"];
 const PLACE_TYPES = ["shelter", "kitchen", "food bank"];
 const FOOD_KINDS = ["prepared", "packaged", "drinks"];
 const BUSY = ["offered", "accepted", "picked_up"]; // a volunteer holding one of these cannot be removed
+// Stage 1: how long places have to say yes before a lot is unclaimed. Tests can change it.
+let placeTimeoutMs = 10 * 60000;
+export const setPlaceTimeoutMs = (ms) => { placeTimeoutMs = ms; };
 const E164 = /^\+[1-9]\d{7,14}$/;
 // Old demo placeholders (+1 202 555 xxxx). Never dial or keep these.
 const PLACEHOLDER_PHONE = /^\+1202555\d{4}$/;
 
 const seedPlaces = () => [
-  { id: "p1", name: "Partner shelter A", type: "shelter", distanceMiles: 2, capacity: 150, accepts: ["prepared", "packaged", "drinks"] },
-  { id: "p2", name: "Partner shelter B", type: "shelter", distanceMiles: 4, capacity: 200, accepts: ["prepared", "packaged", "drinks"] },
-  { id: "p3", name: "Community kitchen", type: "kitchen", distanceMiles: 6, capacity: 100, accepts: ["prepared", "packaged"] },
+  { id: "p1", name: "Partner shelter A", type: "shelter", distanceMiles: 2, capacity: 150, accepts: ["prepared", "packaged", "drinks"], phone: "" },
+  { id: "p2", name: "Partner shelter B", type: "shelter", distanceMiles: 4, capacity: 200, accepts: ["prepared", "packaged", "drinks"], phone: "" },
+  { id: "p3", name: "Community kitchen", type: "kitchen", distanceMiles: 6, capacity: 100, accepts: ["prepared", "packaged"], phone: "" },
 ];
 const seedVolunteers = () => [
   { id: "v1", name: "Alex Rivera", phone: "", optedIn: true, status: "ready" },
@@ -35,7 +41,7 @@ const seedVolunteers = () => [
   { id: "v3", name: "Sam Taylor", phone: "", optedIn: true, status: "ready" },
 ];
 const initial = () => ({
-  event: null, report: null, places: seedPlaces(), offers: [], volunteers: seedVolunteers(),
+  event: null, report: null, places: seedPlaces(), lots: [], offers: [], volunteers: seedVolunteers(),
   incident: null, feed: [],
 });
 
@@ -51,8 +57,11 @@ function normalise(raw) {
   s.event = raw.event ?? null;
   s.report = raw.report ?? null;
   s.offers = Array.isArray(raw.offers) ? raw.offers : [];
+  s.lots = Array.isArray(raw.lots) ? raw.lots : [];
   // Older saved state has no places key: give it the seeds. An empty list the user made stays empty.
-  s.places = Array.isArray(raw.places) ? raw.places : seedPlaces();
+  s.places = (Array.isArray(raw.places) ? raw.places : seedPlaces()).map((p) => ({
+    ...p, phone: typeof p.phone === "string" && E164.test(p.phone) && !PLACEHOLDER_PHONE.test(p.phone) ? p.phone : "",
+  }));
   const kept = raw.volunteers.filter((v) => v && !OLD_FAKE.has(v.name));
   s.volunteers = kept.map((v) => ({
     ...v,
@@ -115,6 +124,7 @@ export function categorize(name) {
 const placeById = (id) => state.places.find((p) => p.id === id);
 const volunteerById = (id) => state.volunteers.find((v) => v.id === id);
 const offerById = (id) => state.offers.find((o) => o.id === id);
+const lotById = (id) => state.lots.find((l) => l.id === id);
 
 // ---- snapshot ---------------------------------------------------------------
 const active = () => state.incident && ["open", "in_progress"].includes(state.incident.status);
@@ -132,7 +142,8 @@ function summary() {
   const left = sum(state.report?.items ?? [], (i) => i.left);
   const rescued = sum(state.offers.filter((o) => RESCUED.includes(o.status)), (o) => o.portions);
   const byPlace = state.places.map((p) => {
-    const mine = state.offers.filter((o) => o.placeId === p.id && o.status !== "declined");
+    // Lot offers only count once the place said yes; legacy offers (no lot) count unless declined.
+    const mine = state.offers.filter((o) => o.placeId === p.id && (o.lotId ? PLACE_YES.includes(o.status) : o.status !== "declined"));
     return {
       placeId: p.id, name: p.name, portions: sum(mine, (o) => o.portions),
       rescued: sum(mine.filter((o) => RESCUED.includes(o.status)), (o) => o.portions),
@@ -149,6 +160,11 @@ function journeyStep() {
   if (!e) return "event";
   const complete = e.venue && e.date && e.items.length > 0 && Number.isFinite(e.goodForMinutes);
   if (!state.report) return complete ? "photo" : "details";
+  if (state.lots.length) {
+    if (state.lots.every((l) => l.status === "proposed")) return "match";
+    if (state.lots.every((l) => ["delivered", "unclaimed"].includes(l.status)) || (state.incident && !active())) return "done";
+    return "outreach";
+  }
   if (!state.offers.length) return "done";
   if (state.offers.every((o) => o.status === "proposed")) return "match";
   const settled = state.offers.every((o) => ["declined", "dropped_off"].includes(o.status));
@@ -156,10 +172,53 @@ function journeyStep() {
   return "outreach";
 }
 
+// Per-lot progress for the UI. One lot = one leftover item from the report.
+const LOT_STEP_KEYS = ["places", "place_yes", "volunteer", "on_the_way", "delivered"];
+function lotView(lot) {
+  const mine = state.offers.filter((o) => o.lotId === lot.id);
+  const win = lot.offerId ? mine.find((o) => o.id === lot.offerId) : null;
+  const place = win ? placeById(win.placeId) : null;
+  const vol = win?.volunteerId ? volunteerById(win.volunteerId) : null;
+  let status = lot.status;
+  if (lot.status === "placed" && win) {
+    status = { place_accepted: "waiting_volunteer", offered: "calling_volunteer", accepted: "on_the_way",
+      picked_up: "on_the_way", dropped_off: "delivered" }[win.status] || "waiting_volunteer";
+  }
+  const placeName = place?.name ?? "";
+  const label = {
+    proposed: "Ready to call nonprofits",
+    calling_places: "Calling nonprofits",
+    unclaimed: "Nobody took it",
+    waiting_volunteer: `${placeName} said yes. Waiting for a free volunteer`,
+    calling_volunteer: `${placeName} said yes. Calling ${vol?.name ?? "a volunteer"}`,
+    on_the_way: `${vol?.name ?? "A volunteer"} is on the way`,
+    delivered: `Delivered to ${placeName}`,
+  }[status] ?? status;
+  // Index of the step the lot is on now (steps before it are done). "unclaimed" fails at step 0.
+  const at = { proposed: -1, calling_places: 0, unclaimed: 0, waiting_volunteer: 2, calling_volunteer: 2, on_the_way: 3, delivered: 5 }[status] ?? -1;
+  const stepLabels = ["Calling nonprofits", place ? `${placeName} said yes` : "A place says yes",
+    vol ? `Calling ${vol.name}` : "Calling a volunteer", "On the way", "Delivered"];
+  const steps = LOT_STEP_KEYS.map((key, i) => ({
+    key, label: stepLabels[i],
+    state: i < at ? "done" : i > at || at < 0 ? "todo"
+      : status === "unclaimed" ? "failed" : status === "waiting_volunteer" ? "waiting" : "active",
+  }));
+  return {
+    id: lot.id, item: lot.item, unit: lot.unit, portions: lot.portions, kind: lot.kind,
+    status, stage: { proposed: "match", calling_places: "places", unclaimed: "done", delivered: "done" }[status] ?? "volunteer",
+    label, steps, placeDeadline: lot.placeDeadline ?? null,
+    offerId: win?.id ?? null, placeId: place?.id ?? null, placeName, placeAddress: place?.address ?? "",
+    volunteerId: vol?.id ?? null, volunteerName: vol?.name ?? "",
+    places: mine.map((o) => ({ offerId: o.id, placeId: o.placeId, name: placeById(o.placeId)?.name ?? "",
+      portions: o.portions, status: PLACE_YES.includes(o.status) ? "accepted" : o.status, phoneSet: Boolean(placeById(o.placeId)?.phone) })),
+    updatedAt: lot.updatedAt,
+  };
+}
+
 // The browser never sees a full phone number: only whether one is set and its last 4 digits.
-const maskVolunteer = ({ phone, ...v }) => {
+const maskPhone = ({ phone, ...x }) => {
   const set = typeof phone === "string" && phone.length > 0;
-  return { ...v, phoneSet: set, phoneLast4: set ? phone.slice(-4) : "" };
+  return { ...x, phoneSet: set, phoneLast4: set ? phone.slice(-4) : "" };
 };
 
 function fullSnapshot() {
@@ -170,7 +229,9 @@ function fullSnapshot() {
   const rescued = sum(assignments, (a) => a.pickedUp);
   return {
     ...state,
+    places: state.places.map((p) => ({ ...p })),
     volunteers: state.volunteers.map((v) => ({ ...v })),
+    lots: state.lots.map(lotView),
     incident: incident ? { ...incident, assignments } : null,
     journeyStep: journeyStep(),
     summary: summary(),
@@ -181,13 +242,14 @@ function fullSnapshot() {
 // Public snapshot: safe to send to the browser (GET /api/state, SSE, agent).
 export function snapshot() {
   const snap = fullSnapshot();
-  return { ...snap, volunteers: snap.volunteers.map(maskVolunteer) };
+  return { ...snap, places: snap.places.map(maskPhone), volunteers: snap.volunteers.map(maskPhone) };
 }
 
 // Server-side only: same shape as snapshot() but with real phone numbers, for voice and sms.
 // Never return this from an HTTP route.
 export const internalState = () => fullSnapshot();
 export const volunteerPhone = (id) => volunteerById(id)?.phone || "";
+export const placePhone = (id) => placeById(id)?.phone || "";
 
 // ---- commit -----------------------------------------------------------------
 function commit(next) {
@@ -202,6 +264,7 @@ function commit(next) {
 const withFeed = (texts, kind = "hq") => [...[].concat(texts).map((t) => entry(t, kind)).reverse(), ...state.feed];
 
 export function expire() {
+  checkTimeouts();
   if (active() && Date.now() >= Date.parse(state.incident.deadline)) {
     const rescued = snapshot().totals.rescued;
     const status = rescued >= state.incident.total ? "resolved" : "expired";
@@ -296,28 +359,28 @@ export function patchEvent(body) {
 }
 
 // ---- report + matching ------------------------------------------------------
+// Each leftover item becomes one lot. Every place that takes that kind of food is proposed for it
+// (nearest first). Places that can hold the whole lot are preferred; if none can, every place that
+// takes the food is proposed for as much as it can hold. In stage 1 the first place to say yes wins the lot.
 function propose(reportItems) {
-  const remaining = new Map(state.places.map((p) => [p.id, p.capacity]));
   const ordered = [...state.places].sort((a, b) => a.distanceMiles - b.distanceMiles);
+  const stamp = new Date().toISOString();
+  const lots = [];
   const offers = [];
   for (const it of reportItems) {
-    let left = it.left;
-    if (left <= 0) continue;
-    const cat = categorize(it.item);
-    for (const place of ordered) {
-      if (left <= 0) break;
-      const accepts = Array.isArray(place.accepts) ? place.accepts : [];
-      if (accepts.length && !accepts.includes(cat)) continue;
-      const room = remaining.get(place.id);
-      if (room <= 0) continue;
-      const portions = Math.min(room, left);
-      remaining.set(place.id, room - portions);
-      left -= portions;
-      offers.push({ id: randomUUID(), placeId: place.id, volunteerId: null, item: it.item, portions,
-        status: "proposed", updatedAt: new Date().toISOString() });
+    if (it.left <= 0) continue;
+    const kind = categorize(it.item);
+    const lot = { id: randomUUID(), item: it.item, unit: it.unit, portions: it.left, kind,
+      status: "proposed", placeDeadline: null, offerId: null, updatedAt: stamp };
+    lots.push(lot);
+    const fits = ordered.filter((p) => !Array.isArray(p.accepts) || !p.accepts.length || p.accepts.includes(kind));
+    const roomy = fits.filter((p) => p.capacity >= it.left);
+    for (const place of roomy.length ? roomy : fits) {
+      offers.push({ id: randomUUID(), lotId: lot.id, placeId: place.id, volunteerId: null, item: it.item,
+        portions: Math.min(place.capacity, it.left), status: "proposed", updatedAt: stamp });
     }
   }
-  return offers;
+  return { lots, offers };
 }
 
 export function submitReport(body) {
@@ -340,14 +403,16 @@ export function submitReport(body) {
     return out;
   });
   const report = { items, confirmedAt: new Date().toISOString() };
-  const offers = propose(items);
+  const { lots, offers } = propose(items);
   const total = sum(items, (i) => i.left);
-  const placed = sum(offers, (o) => o.portions);
   const texts = [];
   const leftText = items.filter((i) => i.left > 0).map((i) => `${i.left} ${i.item}`).join(", ");
   texts.push(total > 0 ? `Confirmed what is left: ${leftText}.` : "Confirmed that nothing is left over.");
-  for (const o of offers) texts.push(`Matched ${o.portions} ${o.item} to ${placeById(o.placeId).name}.`);
-  if (total > placed) texts.push(`${total - placed} portions have no place that can take them yet.`);
+  for (const lot of lots) {
+    const names = offers.filter((o) => o.lotId === lot.id).map((o) => placeById(o.placeId).name);
+    texts.push(names.length ? `${lot.portions} ${lot.item} could go to: ${names.join(", ")}.`
+      : `${lot.portions} ${lot.item} have no place that can take them yet.`);
+  }
   const minutes = state.event.goodForMinutes ?? DEFAULT_WINDOW_MINUTES;
   const incident = total > 0 ? {
     id: randomUUID(), food: items.filter((i) => i.left > 0).map((i) => i.item).join(", ").slice(0, 100), total,
@@ -356,120 +421,285 @@ export function submitReport(body) {
     status: "open", assignments: [],
   } : null;
   commit({
-    ...state, report, offers, incident,
+    ...state, report, lots, offers, incident,
     volunteers: state.volunteers.map((v) => ({ ...v, status: "ready" })),
     feed: withFeed(texts),
   });
   return snapshot();
 }
 
-// ---- offers -----------------------------------------------------------------
+// ---- offers: two-stage outreach --------------------------------------------
+// Stage 1: every proposed place with a phone is called at once about each lot. First yes wins the lot.
+// Stage 2: the winning offer goes to the first free volunteer with a phone, who is called to carry it.
+// Offer status: proposed -> calling (place being asked) -> place_accepted | declined | taken | unclaimed | skipped
+//               place_accepted -> offered (volunteer asked) -> accepted -> picked_up -> dropped_off (delivered)
 let pendingCalls = [];
-// Offer ids that were just sent to a volunteer and should be phoned (if voice is configured).
+// Offer ids that need a phone call now (a place in stage 1 or a volunteer in stage 2), if voice is configured.
 export const takePendingCalls = () => { const c = pendingCalls; pendingCalls = []; return c; };
 
-export function sendOffers(body) {
-  if (!state.offers.length) throw conflict("There are no proposed offers yet. Confirm what is left first.");
-  const adjust = new Map();
+// A working copy of the parts of state an outreach step changes. Mutate it, then save().
+const draft = () => ({
+  ...state,
+  lots: state.lots.map((l) => ({ ...l })),
+  offers: state.offers.map((o) => ({ ...o })),
+  volunteers: state.volunteers.map((v) => ({ ...v })),
+});
+const isActive = (inc) => inc && ["open", "in_progress"].includes(inc.status);
+
+// The rescue is finished when every lot is delivered or unclaimed.
+function finish(d, texts) {
+  if (!d.lots.length || !isActive(d.incident)) return;
+  if (!d.lots.every((l) => ["delivered", "unclaimed"].includes(l.status))) return;
+  const rescued = sum(d.offers.filter((o) => RESCUED.includes(o.status)), (o) => o.portions);
+  const full = rescued >= d.incident.total;
+  texts.push(full ? "All food rescued." : `Rescue finished: ${rescued} of ${d.incident.total} portions delivered.`);
+  d.incident = { ...d.incident, status: full ? "resolved" : "expired" };
+}
+function save(d, texts, calls = []) {
+  finish(d, texts);
+  commit({ ...d, feed: withFeed(texts) });
+  pendingCalls.push(...calls);
+}
+
+// Give a place-accepted offer to the first free volunteer with a phone. Returns true if one was asked.
+function assignVolunteer(d, o, texts, calls, { quiet = false } = {}) {
+  const place = placeById(o.placeId);
+  const busy = new Set(d.offers.filter((x) => x.id !== o.id && x.volunteerId && BUSY.includes(x.status)).map((x) => x.volunteerId));
+  const skip = o.declinedBy || [];
+  const v = d.volunteers.find((x) => x.optedIn && x.phone && !busy.has(x.id) && !skip.includes(x.id));
+  const stamp = new Date().toISOString();
+  if (!v) {
+    o.status = "place_accepted"; o.volunteerId = null; o.updatedAt = stamp;
+    if (!quiet) texts.push(`No volunteer with a phone is free to carry ${o.portions} ${o.item} to ${place?.name ?? "the place"} yet.`);
+    return false;
+  }
+  o.status = "offered"; o.volunteerId = v.id; o.updatedAt = stamp;
+  v.status = "asked";
+  texts.push(`Asking ${v.name} to carry ${o.portions} ${o.item} to ${place?.name ?? "the place"}.`);
+  calls.push(o.id);
+  return true;
+}
+// Hand waiting lots to volunteers who just became free (or just got a phone).
+function assignWaiting(d, texts, calls) {
+  for (const o of d.offers) {
+    if (o.lotId && o.status === "place_accepted" && !o.volunteerId) assignVolunteer(d, o, texts, calls, { quiet: true });
+  }
+}
+
+// POST /api/outreach/places (and /api/offers/send, /api/quick): start stage 1.
+export function startPlaceOutreach(body) {
+  expire();
+  if (!state.lots.length) throw conflict("There is nothing to send yet. Confirm what is left first.");
+  const d = draft();
   if (body?.offers !== undefined) {
     if (!Array.isArray(body.offers)) throw bad("offers must be a list.");
     for (const a of body.offers) {
-      const o = offerById(a?.id);
+      const o = d.offers.find((x) => x.id === a?.id);
       if (!o) throw notFound("One of those offers does not exist.");
-      adjust.set(o.id, count(a.portions, "Portions", { min: 0, max: placeById(o.placeId)?.capacity ?? 1000000 }));
+      const portions = count(a.portions, "Portions", { min: 0, max: placeById(o.placeId)?.capacity ?? 1000000 });
+      if (o.status === "proposed") o.portions = portions;
     }
+    d.offers = d.offers.filter((o) => o.portions > 0);
   }
+  const todo = d.lots.filter((l) => l.status === "proposed");
+  if (!todo.length) throw conflict("Every lot has already been sent out.");
   const stamp = new Date().toISOString();
-  let offers = state.offers
-    .map((o) => (adjust.has(o.id) && o.status === "proposed" ? { ...o, portions: adjust.get(o.id) } : o))
-    .filter((o) => o.portions > 0);
-  // Volunteers who can be phoned go first.
-  const pool = state.volunteers.filter((v) => v.optedIn).sort((a, b) => Number(Boolean(b.phone)) - Number(Boolean(a.phone)));
-  let turn = offers.filter((o) => o.volunteerId).length;
-  const volunteers = state.volunteers.map((v) => ({ ...v }));
+  const deadline = new Date(Date.now() + placeTimeoutMs).toISOString();
   const texts = [];
-  const called = [];
-  offers = offers.map((o) => {
-    if (o.status !== "proposed") return o;
-    const vol = pool.length ? pool[turn++ % pool.length] : null;
-    const place = placeById(o.placeId);
-    if (vol) {
-      const v = volunteers.find((x) => x.id === vol.id);
-      if (v.status === "ready" || v.status === "dropped_off") v.status = "asked";
-      texts.push(`Offered ${o.portions} ${o.item} to ${place.name}. Asked ${vol.name} to deliver it.`);
-      called.push(o.id);
-    } else {
-      texts.push(`Offered ${o.portions} ${o.item} to ${place.name}. No volunteer is available yet.`);
+  const calls = [];
+  for (const lot of todo) {
+    const mine = d.offers.filter((o) => o.lotId === lot.id && o.status === "proposed");
+    const callable = mine.filter((o) => placeById(o.placeId)?.phone);
+    for (const o of mine) { o.status = callable.includes(o) ? "calling" : "skipped"; o.updatedAt = stamp; }
+    lot.updatedAt = stamp;
+    if (!callable.length) {
+      lot.status = "unclaimed";
+      texts.push(`No place with a phone number can take ${lot.portions} ${lot.item}, so it is unclaimed. Add a phone number to a place to call it.`);
+      continue;
     }
-    return { ...o, volunteerId: vol ? vol.id : null, status: "offered", updatedAt: stamp };
-  });
-  if (!texts.length) throw conflict("Every offer has already been sent.");
-  commit({
-    ...state, offers, volunteers,
-    incident: state.incident ? { ...state.incident, status: "in_progress" } : null,
-    feed: withFeed(texts),
-  });
-  pendingCalls.push(...called);
+    lot.status = "calling_places";
+    lot.placeDeadline = deadline;
+    texts.push(`Calling nonprofits about ${lot.portions} ${lot.item}: ${callable.map((o) => placeById(o.placeId).name).join(", ")}.`);
+    calls.push(...callable.map((o) => o.id));
+  }
+  if (d.incident && d.incident.status === "open") d.incident = { ...d.incident, status: "in_progress" };
+  save(d, texts, calls);
   return snapshot();
 }
+export const sendOffers = startPlaceOutreach;
 
-function setOffer(offerId, status, { volunteerStatus, feedText, from }) {
-  const o = offerById(offerId);
-  if (!o) throw notFound("That offer does not exist.");
-  if (!from.includes(o.status)) throw conflict(`This offer is ${o.status.replace("_", " ")}, so that is not possible right now.`);
+// A place answers a stage 1 call. Returns "won" (it gets the lot), "taken" (someone else said yes first),
+// "declined", or "closed" (the lot is no longer open).
+export function placeAnswer(offerId, action) {
+  if (!["accept", "decline"].includes(action)) throw bad("Action must be accept or decline.");
+  const o0 = offerById(offerId);
+  if (!o0) throw notFound("That offer does not exist.");
+  if (o0.status !== "calling") return o0.status === "taken" ? "taken" : "closed";
+  const d = draft();
+  const o = d.offers.find((x) => x.id === offerId);
+  const lot = d.lots.find((l) => l.id === o.lotId);
+  const place = placeById(o.placeId);
   const stamp = new Date().toISOString();
-  const offers = state.offers.map((x) => (x.id === offerId ? { ...x, status, updatedAt: stamp } : x));
-  const volunteers = state.volunteers.map((v) => (v.id === o.volunteerId ? { ...v, status: volunteerStatus } : v));
-  const texts = [feedText(o, placeById(o.placeId), volunteerById(o.volunteerId))];
-  let incident = state.incident;
-  const allDone = offers.every((x) => ["declined", "dropped_off"].includes(x.status));
-  if (allDone && incident && active()) {
-    const rescued = sum(offers.filter((x) => RESCUED.includes(x.status)), (x) => x.portions);
-    const full = rescued >= incident.total;
-    texts.push(full ? "All food rescued." : `Rescue finished: ${rescued} of ${incident.total} portions delivered.`);
-    incident = { ...incident, status: full ? "resolved" : "expired" };
+  const texts = [];
+  const calls = [];
+  if (!lot || lot.status !== "calling_places") return "closed";
+  if (action === "decline") {
+    o.status = "declined"; o.updatedAt = stamp;
+    texts.push(`${place.name} can't take ${lot.portions} ${lot.item}.`);
+    if (!d.offers.some((x) => x.lotId === lot.id && x.status === "calling")) {
+      lot.status = "unclaimed"; lot.updatedAt = stamp;
+      texts.push(`Every place said no to ${lot.portions} ${lot.item}. It is unclaimed.`);
+    }
+    save(d, texts);
+    return "declined";
   }
-  commit({ ...state, offers, volunteers, incident, feed: withFeed(texts) });
+  // First yes wins. The other places still being called are told it is taken and not called again.
+  for (const x of d.offers) {
+    if (x.lotId === lot.id && x.id !== o.id && x.status === "calling") { x.status = "taken"; x.updatedAt = stamp; }
+  }
+  lot.status = "placed"; lot.offerId = o.id; lot.updatedAt = stamp;
+  texts.push(`${place.name} said yes to ${o.portions} ${o.item}.`);
+  assignVolunteer(d, o, texts, calls);
+  save(d, texts, calls);
+  return "won";
 }
 
+function volunteerAnswer(offerId, action) {
+  const d = draft();
+  const o = d.offers.find((x) => x.id === offerId);
+  if (o.status !== "offered") throw conflict(`This offer is ${o.status.replace("_", " ")}, so that is not possible right now.`);
+  const place = placeById(o.placeId);
+  const v = d.volunteers.find((x) => x.id === o.volunteerId);
+  const who = v ? v.name : "A volunteer";
+  const stamp = new Date().toISOString();
+  const texts = [];
+  const calls = [];
+  if (action === "accept") {
+    o.status = "accepted"; o.updatedAt = stamp;
+    if (v) v.status = "accepted";
+    texts.push(`${who} accepted: ${o.portions} ${o.item} to ${place?.name ?? "the place"}. On the way.`);
+  } else {
+    if (v) v.status = "declined";
+    o.declinedBy = [...(o.declinedBy || []), o.volunteerId].filter(Boolean);
+    texts.push(`${who} can't take ${o.portions} ${o.item}.`);
+    if (o.lotId) {
+      assignVolunteer(d, o, texts, calls);
+    } else {
+      // Legacy offer without a lot: hand it to the next free volunteer, or give up.
+      const busy = new Set(d.offers.filter((x) => x.id !== o.id && x.volunteerId && BUSY.includes(x.status)).map((x) => x.volunteerId));
+      const next = d.volunteers.find((x) => x.optedIn && x.phone && !busy.has(x.id) && !o.declinedBy.includes(x.id));
+      if (next) { o.volunteerId = next.id; next.status = "asked"; texts.push(`Asking ${next.name} instead.`); calls.push(o.id); }
+      else { o.status = "declined"; texts.push("No other volunteer is free."); }
+      o.updatedAt = stamp;
+    }
+  }
+  save(d, texts, calls);
+}
+
+// Accept/decline for whoever is being asked right now: the place in stage 1, the volunteer in stage 2.
 export function respondToOffer(offerId, action) {
   if (!["accept", "decline"].includes(action)) throw bad("Action must be accept or decline.");
-  const who = (v) => (v ? v.name : "A volunteer");
-  if (action === "accept") {
-    setOffer(offerId, "accepted", { from: ["offered"], volunteerStatus: "accepted",
-      feedText: (o, p, v) => `${who(v)} accepted ${o.portions} ${o.item} for ${p.name}.` });
+  const o = offerById(offerId);
+  if (!o) throw notFound("That offer does not exist.");
+  if (o.status === "calling" || o.status === "taken") {
+    const r = placeAnswer(offerId, action);
+    if (r === "taken") throw conflict("Another place already said yes to this food.");
+    if (r === "closed") throw conflict("This offer is no longer open.");
   } else {
-    // Hand the same offer to the next free volunteer (phone first) instead of giving up.
-    const o = offerById(offerId);
-    if (o && o.status === "offered") {
-      const busy = new Set(state.offers.filter((x) => ["offered", "accepted", "picked_up"].includes(x.status) && x.id !== o.id).map((x) => x.volunteerId));
-      const next = state.volunteers
-        .filter((v) => v.optedIn && v.id !== o.volunteerId && !busy.has(v.id) && !(o.declinedBy || []).includes(v.id))
-        .sort((a, b) => Number(Boolean(b.phone)) - Number(Boolean(a.phone)))[0];
-      if (next) {
-        const prev = volunteerById(o.volunteerId);
-        const stamp = new Date().toISOString();
-        const offers = state.offers.map((x) => (x.id === o.id ? { ...x, volunteerId: next.id, declinedBy: [...(x.declinedBy || []), o.volunteerId], updatedAt: stamp } : x));
-        const volunteers = state.volunteers.map((v) => (v.id === o.volunteerId ? { ...v, status: "declined" } : v.id === next.id ? { ...v, status: "asked" } : v));
-        pendingCalls.push(o.id);
-        commit({ ...state, offers, volunteers, feed: withFeed([`${who(prev)} can't take ${o.portions} ${o.item}. Asking ${next.name} instead.`]) });
-        return snapshot();
-      }
-    }
-    setOffer(offerId, "declined", { from: ["offered"], volunteerStatus: "declined",
-      feedText: (o, p, v) => `${who(v)} declined ${o.portions} ${o.item} for ${p.name}. No other volunteer is free.` });
+    volunteerAnswer(offerId, action);
   }
   return snapshot();
 }
+
 export function pickupOffer(offerId) {
-  setOffer(offerId, "picked_up", { from: ["accepted"], volunteerStatus: "on_the_way",
-    feedText: (o, p, v) => `${v ? v.name : "A volunteer"} picked up ${o.portions} ${o.item} and is heading to ${p.name}.` });
+  const o = offerById(offerId);
+  if (!o) throw notFound("That offer does not exist.");
+  if (o.status !== "accepted") throw conflict(`This offer is ${o.status.replace("_", " ")}, so that is not possible right now.`);
+  const d = draft();
+  const x = d.offers.find((y) => y.id === offerId);
+  x.status = "picked_up"; x.updatedAt = new Date().toISOString();
+  const v = d.volunteers.find((y) => y.id === x.volunteerId);
+  if (v) v.status = "on_the_way";
+  save(d, [`${v ? v.name : "A volunteer"} picked up ${x.portions} ${x.item} and is heading to ${placeById(x.placeId)?.name ?? "the place"}.`]);
   return snapshot();
 }
-export function dropoffOffer(offerId) {
-  setOffer(offerId, "dropped_off", { from: ["picked_up", "accepted"], volunteerStatus: "dropped_off",
-    feedText: (o, p) => `${o.portions} ${o.item} delivered to ${p.name}.` });
+
+// The volunteer confirms the drop-off (volunteer page, HQ, or inbound call). Only this counts as rescued.
+// Pass volunteerId to make sure the confirmation comes from the volunteer holding the job.
+export function deliverOffer(offerId, { volunteerId } = {}) {
+  const o = offerById(offerId);
+  if (!o) throw notFound("That offer does not exist.");
+  if (volunteerId && o.volunteerId !== volunteerId) throw conflict("This pickup belongs to another volunteer.");
+  if (!["accepted", "picked_up"].includes(o.status)) throw conflict(`This offer is ${o.status.replace("_", " ")}, so that is not possible right now.`);
+  const d = draft();
+  const x = d.offers.find((y) => y.id === offerId);
+  const stamp = new Date().toISOString();
+  x.status = "dropped_off"; x.updatedAt = stamp;
+  const v = d.volunteers.find((y) => y.id === x.volunteerId);
+  if (v) v.status = "dropped_off";
+  const lot = d.lots.find((l) => l.id === x.lotId);
+  if (lot) { lot.status = "delivered"; lot.updatedAt = stamp; }
+  const texts = [`${v ? v.name : "A volunteer"} delivered ${x.portions} ${x.item} to ${placeById(x.placeId)?.name ?? "the place"}.`];
+  const calls = [];
+  assignWaiting(d, texts, calls); // this volunteer is free again
+  if (!x.lotId && isActive(d.incident) && d.offers.every((y) => ["declined", "dropped_off"].includes(y.status))) {
+    const rescued = sum(d.offers.filter((y) => RESCUED.includes(y.status)), (y) => y.portions);
+    const full = rescued >= d.incident.total;
+    texts.push(full ? "All food rescued." : `Rescue finished: ${rescued} of ${d.incident.total} portions delivered.`);
+    d.incident = { ...d.incident, status: full ? "resolved" : "expired" };
+  }
+  save(d, texts, calls);
   return snapshot();
+}
+export const dropoffOffer = (offerId) => deliverOffer(offerId);
+
+// Stage 1 timeout: lots nobody said yes to within the window become unclaimed. `now` is injectable for tests.
+export function checkTimeouts(now = Date.now()) {
+  const due = state.lots.filter((l) => l.status === "calling_places" && l.placeDeadline && Date.parse(l.placeDeadline) <= now);
+  if (!due.length) return false;
+  const d = draft();
+  const stamp = new Date().toISOString();
+  const texts = [];
+  const minutes = Math.max(1, Math.round(placeTimeoutMs / 60000));
+  for (const l of due) {
+    const lot = d.lots.find((x) => x.id === l.id);
+    lot.status = "unclaimed"; lot.updatedAt = stamp;
+    for (const o of d.offers) if (o.lotId === lot.id && o.status === "calling") { o.status = "unclaimed"; o.updatedAt = stamp; }
+    texts.push(`No place said yes to ${lot.portions} ${lot.item} within ${minutes} minutes. It is unclaimed.`);
+  }
+  save(d, texts);
+  return true;
+}
+
+// Inbound call from a volunteer: their open job (accepted or picked up), oldest first. Server side only.
+export function openJobForPhone(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const phone = normalizePhone(raw);
+  const v = state.volunteers.find((x) => x.phone && x.phone === phone);
+  if (!v) return null;
+  const o = state.offers
+    .filter((x) => x.volunteerId === v.id && ["accepted", "picked_up"].includes(x.status))
+    .sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt)))[0];
+  if (!o) return { volunteerId: v.id, volunteerName: v.name, offerId: null };
+  const place = placeById(o.placeId);
+  return { volunteerId: v.id, volunteerName: v.name, offerId: o.id, item: o.item, portions: o.portions,
+    placeName: place?.name ?? "the place", placeAddress: place?.address ?? "",
+    venue: state.event?.venue || state.incident?.location || "the event" };
+}
+
+// Who to phone for an offer right now. Server side only (real numbers).
+export function callTarget(offerId) {
+  const o = offerById(offerId);
+  if (!o) return null;
+  if (o.volunteerId && BUSY.includes(o.status)) {
+    const v = volunteerById(o.volunteerId);
+    return v ? { kind: "volunteer", id: v.id, name: v.name, phone: v.optedIn ? v.phone : "" } : null;
+  }
+  if (o.status === "calling") {
+    const p = placeById(o.placeId);
+    return p ? { kind: "place", id: p.id, name: p.name, phone: p.phone || "" } : null;
+  }
+  return null;
 }
 
 // ---- volunteers -------------------------------------------------------------
@@ -489,8 +719,17 @@ function parsePhone(phone, { allowEmpty = false } = {}) {
   if (typeof phone !== "string") throw bad(PHONE_HELP);
   const p = normalizePhone(phone);
   if (!E164.test(p)) throw bad(PHONE_HELP);
-  if (PLACEHOLDER_PHONE.test(p)) throw bad("That is a demo placeholder number. Add the volunteer's real phone number.");
+  if (PLACEHOLDER_PHONE.test(p)) throw bad("That is a demo placeholder number. Add a real phone number.");
   return p;
+}
+// A volunteer was added, freed or given a phone: hand them a lot that is waiting for one.
+function offerWaitingLots() {
+  if (!state.offers.some((o) => o.lotId && o.status === "place_accepted" && !o.volunteerId)) return;
+  const d = draft();
+  const texts = [];
+  const calls = [];
+  assignWaiting(d, texts, calls);
+  if (texts.length) save(d, texts, calls);
 }
 const volunteerName = (v, selfId = null) => {
   const name = str(v, 80, "Volunteer name", { required: true });
@@ -514,6 +753,7 @@ export function addVolunteer(body) {
     v.optedIn = b.optedIn;
   }
   commit({ ...state, volunteers: [...state.volunteers, v], feed: withFeed(`Added volunteer ${v.name}.`) });
+  offerWaitingLots();
   return snapshot();
 }
 
@@ -538,6 +778,7 @@ export function patchVolunteer(id, body) {
     volunteers: state.volunteers.map((x) => (x.id === id ? next : x)),
     feed: changed.length ? withFeed(`Updated volunteer ${v.name}: ${changed.join(", ")}.`) : state.feed,
   });
+  offerWaitingLots();
   return snapshot();
 }
 
@@ -560,6 +801,7 @@ export function setVolunteerPhone(id, phone) {
     volunteers: state.volunteers.map((x) => (x.id === id ? { ...x, phone: p } : x)),
     feed: withFeed(`Saved a phone number for ${v.name}.`),
   });
+  offerWaitingLots();
   return snapshot();
 }
 
@@ -591,12 +833,14 @@ function placeFields(b, { partial, selfId = null }) {
     out.accepts = FOOD_KINDS.filter((k) => b.accepts.includes(k));
   }
   if (has("address")) out.address = str(b.address, 200, "Address");
+  // Same rules as volunteers: E.164, US numbers typed without +1 are normalised. Never echoed in feed text.
+  if (has("phone")) out.phone = parsePhone(b.phone, { allowEmpty: true });
   return out;
 }
 
 export function addPlace(body) {
   const fields = placeFields(body ?? {}, { partial: false });
-  const place = { id: `p-${randomUUID()}`, ...fields, address: fields.address ?? "" };
+  const place = { id: `p-${randomUUID()}`, ...fields, address: fields.address ?? "", phone: fields.phone ?? "" };
   commit({ ...state, places: [...state.places, place], feed: withFeed(`Added place ${place.name}.`) });
   return snapshot();
 }
@@ -643,8 +887,15 @@ export function describeOffer(offerId) {
     : state.event?.goodForMinutes ?? DEFAULT_WINDOW_MINUTES;
   const clock = deadline ? deadline.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : null;
   return {
+    // "place" while a place is being asked (stage 1), "volunteer" once a volunteer holds it (stage 2).
+    kind: o.volunteerId && BUSY.includes(o.status) ? "volunteer" : "place",
+    status: o.status,
+    offerId: o.id,
+    volunteerId: vol?.id ?? "",
+    placeId: place?.id ?? "",
     volunteerName: vol?.name ?? "there",
     placeName: place?.name ?? "a partner",
+    placeAddress: place?.address ?? "",
     item: o.item,
     portions: o.portions,
     venue: state.event?.venue || state.incident?.location || "the event",
