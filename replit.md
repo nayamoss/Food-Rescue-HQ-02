@@ -1,45 +1,34 @@
-# [Project name]
+# Food Rescue HQ
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A single-page demo for coordinating the rescue of surplus conference food before its safety deadline.
 
-## Run & Operate
+## Run
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `npm start` or `node server.js` with `PORT` set.
+- The existing managed service serves both the dashboard at `/` and endpoints at `/api`.
+- Frontend: plain HTML, CSS, and vanilla JavaScript in `public/`.
+- Express implementation: `artifacts/api-server/server.js`, loaded by the root `server.js`.
+- No database, authentication, Twilio, or Deepgram integration.
 
-## Stack
+## State
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+State lives in memory and is atomically written to `data/state.json` after every change. Startup reloads it and immediately expires any overdue active incident. Derived counters are never saved.
 
-## Where things live
+Local JSON persistence supports workspace process restarts; it is not a promise of durable storage across cloud deployments or multiple instances.
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+## Scope and decisions
 
-## Architecture decisions
+- The user confirmed this is a web dashboard, not a mobile app.
+- Keep one page and only the three requested demo actions; do not add extra features or messaging integrations.
+- Preserve the provided workspace infrastructure rather than destructively replacing it. The application itself uses only Express and plain browser files.
+- The brief contains truncated lines. Interpret restart persistence as local JSON persistence, and fast-forward as a deadline 60 seconds from now.
+- Placeholder volunteers are for display only. No simulated claims, pickups, or texts.
+- UI: light grey page, white cards, green accent `#2F6B50`, no borders or shadows, card radius at most 12px.
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+## Manual demo
 
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
-
-## User preferences
-
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+1. Open `/`; expect Idle and “All clear. No surplus food reported.”
+2. Click Create sample incident; expect Urgent, approximately 45:00, and 400 unclaimed tacos.
+3. Click Fast-forward; expect 01:00, then Expired after one minute.
+4. Click Reset; expect Idle.
+5. Create an incident and restart the workflow; the incident and original deadline should remain.
