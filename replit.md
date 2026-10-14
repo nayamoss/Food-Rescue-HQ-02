@@ -4,6 +4,9 @@ A single-page demo for coordinating the rescue of surplus conference food before
 
 ## Run
 
+- Graduated web app: `artifacts/food-rescue-hq`, served at `/food-rescue-hq/` by its managed workflow. It retains the selected canvas design and uses the shared incident service through `/food-rescue-hq/api`.
+- The original `/` dashboard and the independent canvas copy are preserved.
+
 - `npm start` or `node server.js` with `PORT` set.
 - The existing managed service serves both the dashboard at `/` and endpoints at `/api`.
 - Frontend: plain HTML, CSS, and vanilla JavaScript in `public/`.

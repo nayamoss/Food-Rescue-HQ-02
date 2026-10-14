@@ -59,6 +59,13 @@ function expire() {
 if (!existsSync(stateFile)) commit(state);
 expire();
 const app = express();
+// The graduated app has a prefixed API route; the original dashboard keeps /api.
+app.use((req, _res, next) => {
+  if (req.url === "/food-rescue-hq/api" || req.url.startsWith("/food-rescue-hq/api/")) {
+    req.url = req.url.slice("/food-rescue-hq".length);
+  }
+  next();
+});
 app.disable("x-powered-by");
 app.use(express.json({ limit: "8kb" }));
 app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });

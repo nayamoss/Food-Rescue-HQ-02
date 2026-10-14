@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/food-rescue-hq/"
+title = "Food Rescue HQ"
+description = "Food Rescue HQ dashboard graduated from the selected canvas design, connected to the existing rescue incident service with persisted state, countdowns, live updates, and demo controls."
+version = "1.0.0"
+id = "artifacts/food-rescue-hq"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/food-rescue-hq/" ]
+localPort = 19085
+
+[services.development]
+run = "pnpm --filter @workspace/food-rescue-hq run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/food-rescue-hq", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/food-rescue-hq/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19085"
+BASE_PATH = "/food-rescue-hq/"
