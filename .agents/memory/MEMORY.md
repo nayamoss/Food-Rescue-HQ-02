@@ -1,1 +1,2 @@
 - [Authentication sequencing](authentication-sequencing.md) — Login is the last implementation step, not a prerequisite for rescue features.
+- [Mobile usability](mobile-usability.md) — The running dashboard must be optimized for phone use as features evolve.

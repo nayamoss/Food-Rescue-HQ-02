@@ -113,3 +113,83 @@ footer svg { width: 12px; height: 12px; }
 body { line-height: normal; }
 svg { display: inline; vertical-align: baseline; }
 small { font-size: smaller; }
+
+/* Let nested grids shrink instead of expanding the page around the table. */
+.lower-grid > *, .incident > *, .metrics > * { min-width: 0; }
+
+@media (max-width: 767px) {
+  :root { --muted: #616e65; }
+  .shell {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .topbar { min-height: 76px; height: auto; padding: 16px 0; gap: 12px; flex-wrap: wrap; }
+  .brand { font-size: 18px; }
+  .live { font-size: 12px; }
+  main { display: flex; flex-direction: column; padding-top: 12px; }
+  .page-heading { order: 0; margin-bottom: 20px; }
+  .error { order: 1; }
+  .incident { order: 2; }
+  .metrics { order: 3; }
+  .progress-card { order: 4; }
+  .demo { order: 5; }
+  .lower-grid { order: 6; }
+  h1 { font-size: clamp(24px, 6.5vw, 29px); line-height: 1.25; letter-spacing: -.8px; }
+  .subtitle { font-size: 14px; line-height: 1.55; }
+  .incident { padding: 20px; gap: 18px; }
+  .incident-top { margin-bottom: 18px; flex-wrap: wrap; gap: 10px; }
+  .eyebrow { font-size: 11px; letter-spacing: 1px; }
+  .status { font-size: 12px; padding: 6px 10px; }
+  .incident h2 { font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; }
+  .incident-note, .location { font-size: 14px; }
+  .location { overflow-wrap: anywhere; }
+  .timer { font-size: 60px; }
+  .timer-label, .timer-help { font-size: 12px; }
+  .timer-panel { padding: 14px; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric { padding: 16px; }
+  .metric-label { font-size: 14px; }
+  .metric-value { font-size: clamp(26px, 7vw, 34px); overflow-wrap: anywhere; max-width: 100%; }
+  .metric-unit { display: block; margin: 3px 0 0; font-size: 12px; color: var(--muted); }
+  .progress-card { padding: 18px; }
+  .progress-title, .progress-title strong { font-size: 14px; }
+  .progress-caption { font-size: 12px; line-height: 1.5; }
+  .progress-track { height: 8px; }
+  .demo { padding: 18px; gap: 18px; }
+  .demo-title { font-size: 15px; }
+  .demo-description { font-size: 13px; line-height: 1.5; }
+  .demo-icon { flex-shrink: 0; }
+  .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .actions .primary { grid-column: 1 / -1; }
+  .actions button, .error button { min-height: 48px; font-size: 14px; justify-content: center; padding: 12px; touch-action: manipulation; }
+  .actions button svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .error { font-size: 14px; align-items: flex-start; flex-wrap: wrap; }
+  .lower-grid { grid-template-columns: minmax(0, 1fr); }
+  .section-heading { padding: 20px 16px 16px; gap: 10px; flex-wrap: wrap; }
+  .section-heading h2 { font-size: 17px; }
+  .count-tag { font-size: 12px; }
+  .table-wrap { padding: 0 10px 12px; }
+  table { table-layout: fixed; white-space: normal; font-size: 13px; }
+  th { font-size: 10px; letter-spacing: .2px; }
+  th, td { padding: 12px 5px; overflow-wrap: anywhere; }
+  th { padding-inline: 2px; overflow-wrap: normal; }
+  th:first-child { width: 33%; }
+  th:nth-child(2), th:nth-child(3) { width: 19%; text-align: center; }
+  th:last-child { width: 29%; }
+  td:nth-child(2), td:nth-child(3) { text-align: center; }
+  .person { display: block; line-height: 1.5; }
+  .avatar { display: none; }
+  .vol-status { display: inline-block; font-size: 12px; line-height: 1.4; padding: 4px 6px; color: #53675a; }
+  .feed-card { min-height: 220px; }
+  .feed { padding: 0 18px 18px; max-height: none; }
+  .feed-text { font-size: 14px; overflow-wrap: anywhere; }
+  .feed-time { display: block; font-size: 12px; color: var(--muted); }
+  .empty-feed { padding: 20px 16px 30px; }
+  .empty-feed p { font-size: 14px; }
+  .empty-feed small { font-size: 12px; color: var(--muted); }
+  footer { font-size: 12px; line-height: 1.5; color: var(--muted); }
+}
+@media (hover: none) {
+  button:hover:not(:disabled) { transform: none; }
+}
