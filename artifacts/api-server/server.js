@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import pino from "pino";
 import * as core from "./lib/core.js";
+import { registerQuick } from "./lib/quick.js";
 import { registerEstimate } from "./lib/estimate.js";
 import { registerAgent } from "./lib/agent.js";
 
@@ -95,7 +96,7 @@ app.post("/api/demo/reset-all", route(200, () => core.resetAll())); // back to s
 app.post("/api/event", route(201, (req) => core.createEvent(req.body)));
 app.patch("/api/event", route(200, (req) => core.patchEvent(req.body)));
 app.post("/api/report", route(201, (req) => core.submitReport(req.body)));
-import("./lib/quick.js").then((m) => m.registerQuick(app, core, placeCalls)).catch(() => {});
+registerQuick(app, core, placeCalls);
 app.post("/api/offers/send", route(200, (req) => core.sendOffers(req.body), placeCalls));
 app.post("/api/offers/:id/respond", route(200, (req) => core.respondToOffer(req.params.id, req.body?.action)));
 app.post("/api/offers/:id/pickup", route(200, (req) => core.pickupOffer(req.params.id)));
