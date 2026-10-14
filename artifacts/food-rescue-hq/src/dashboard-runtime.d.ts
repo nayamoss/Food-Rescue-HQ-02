@@ -1,1 +1,1 @@
-export function mountDashboard(root: HTMLElement): () => void;
+export function mountDashboard(root: HTMLElement, options?: { apiBase?: string }): () => void;
