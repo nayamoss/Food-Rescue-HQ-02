@@ -100,6 +100,8 @@ app.post("/api/incidents", route(201, (req) => core.createIncident(req.body)));
 app.post("/api/demo/fast-forward", route(200, () => core.fastForward()));
 // Coordinator updates only appear in the shared thread; nothing is texted yet.
 app.post("/api/updates", route(201, (req) => core.postUpdate(req.body?.text)));
+// Demo only: simulate a nonprofit or volunteer reply. Works without phones and never places a call.
+app.post("/api/demo/simulate", route(200, (req) => core.demoSimulate(req.body)));
 app.post("/api/demo/reset", route(200, () => core.reset())); // keeps the user's volunteers and places
 app.post("/api/demo/reset-all", route(200, () => core.resetAll())); // back to seeded volunteers and places
 app.post("/api/event", route(201, (req) => core.createEvent(req.body)));

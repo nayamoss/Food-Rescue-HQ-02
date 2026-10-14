@@ -18,6 +18,7 @@ const LOT_STAGES = ['calling_places', 'place_accepted', 'calling_volunteer', 'on
 
 const svg = (body, w = 2.2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const icon = {
+  phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></svg>',
   logo: svg('<path d="m5 12 5 5 9-10"/>', 3),
   up: svg('<path d="m6 15 6-6 6 6"/>', 2.4),
   mic: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
@@ -50,6 +51,7 @@ const TEMPLATE = `
       <span class="rc-logo rc-logo-m">${icon.logo}</span>
       <h1 data-slot="title">Rescue</h1>
       <span class="rc-live" role="status"><i></i><span data-slot="live">Connecting to HQ</span></span>
+      <button type="button" class="rc-btn rc-soft rc-sm rc-showstatus" data-act="toggleStatus" data-slot="showstatus" hidden>Show status</button>
       <button type="button" class="rc-icon rc-account" data-act="account" aria-label="Account and demo tools" aria-expanded="false">${icon.user}</button>
     </header>
     <div class="rc-error" role="alert" hidden><span data-slot="error"></span><button type="button" class="rc-btn" data-act="retry">Retry</button></div>
@@ -109,13 +111,14 @@ function niceDate(value) {
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
 const lower = (s) => String(s || '').toLowerCase();
+const NO_PHONE = 'No nonprofit has a phone number yet. Add one in Nonprofits to start.';
 const foodLine = (items) => (items || []).filter((i) => num(i.left) > 0).map((i) => `${fmt(i.left)} ${lower(i.item)}`).join(', ');
 const listWords = (arr) => (arr.length <= 1 ? arr.join('') : `${arr.slice(0, -1).join(', ')} and ${arr[arr.length - 1]}`);
 const stepSize = (n) => (n >= 100 ? 10 : n >= 20 ? 5 : 1);
 // Phones are never shown in full: only whether one is set and its last 4 digits.
 const phoneSet = (x) => (typeof x?.phoneSet === 'boolean' ? x.phoneSet : /^\+?\d{8,}$/.test(String(x?.phone || '')));
 const phoneLast4 = (x) => String(x?.phoneLast4 || String(x?.phone || '').replace(/\D/g, '').slice(-4) || '');
-const phoneText = (x) => (phoneSet(x) ? `Phone ends in ${phoneLast4(x)}` : 'No phone yet');
+const phoneText = (x) => (phoneSet(x) ? `Phone added, ends in ${phoneLast4(x)}` : 'No phone yet');
 const phoneOk = (raw) => String(raw || '').replace(/\D/g, '').length >= 10;
 const PHONE_HELP = 'Enter the full 10-digit number, for example 762 235 7374. No need to type +1.';
 const dot = (tone, text) => `<span class="rc-dot ${tone}">${esc(text)}</span>`;
@@ -287,16 +290,24 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     const inc = incident();
     const st = rescueStage();
     if (!inc || !report()) return 'idle';
-    if (st === 'done') { const r = remaining(); return inc.status === 'resolved' || r.left === 0 || r.rescued >= r.left || isActiveInc() ? 'done' : 'ended'; }
+    if (st === 'done') { const r = remaining(); return inc.status === 'resolved' || r.left === 0 || r.rescued >= r.left || isActiveInc() ? 'done' : timeUp() ? 'ended' : 'closed'; }
     if (!isActiveInc()) return 'ended';
     const s = secondsLeft();
     return s <= 300 ? 'crit' : s <= 900 ? 'warn' : 'calm';
   }
-  const CHIP = { idle: '', calm: 'Open', warn: 'Open', crit: 'Hurry', done: 'Done', ended: 'Time up' };
+  // Why a rescue ended. "Time up" only when the safety deadline really passed.
+  const timeUp = () => { const d = Date.parse(incident()?.deadline); return Number.isFinite(d) && Date.now() >= d; };
+  function endReason() {
+    if (timeUp()) return 'The time ran out.';
+    const raw = (state?.lots || []).find((l) => l.status === 'unclaimed' && l.label);
+    return raw ? `${raw.label}.` : 'Nobody took the rest.';
+  }
+  const CHIP = { idle: '', calm: 'Open', warn: 'Open', crit: 'Hurry', done: 'Done', ended: 'Time up', closed: 'Ended' };
   function timerText() {
     const urg = urgency();
     if (urg === 'done') return 'Done';
     if (urg === 'ended') return '00:00';
+    if (urg === 'closed') return 'Ended';
     if (urg === 'idle') return '--:--';
     const s = secondsLeft();
     return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
@@ -315,7 +326,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   function shortActivity() {
     const all = lots();
     const has = (x) => all.some((l) => l.stage === x);
-    return has('calling_places') ? 'Calling nonprofits' : has('calling_volunteer') || has('place_accepted') ? 'Calling a volunteer' : has('on_the_way') ? 'On the way' : 'Wrapping up';
+    return has('calling_places') ? 'Calling nonprofits' : has('calling_volunteer') || has('place_accepted') ? 'Calling a volunteer' : has('on_the_way') ? 'On the way' : has('unclaimed') ? endReason().replace(/\.$/, '') : 'Wrapping up';
   }
 
   // ---- shared bits -------------------------------------------------------
@@ -378,10 +389,12 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       return hqRow(`<div class="rc-cardm"><h3>Edit amounts</h3>${rows}
         <div class="rc-actions"><button type="button" class="rc-btn rc-primary" data-act="doneEdit">Done</button></div></div>`);
     }
-    const can = foodLine(items) && !alerting;
+    const noPhone = !places().some(phoneSet);
+    const can = foodLine(items) && !alerting && !noPhone;
     return hqRow(`<div class="rc-cardm rc-confirm"><p class="rc-sentence">${esc(sentence)}</p>${where}
       ${ui.count?.confidenceNote ? `<p class="rc-hint">${esc(ui.count.confidenceNote)}</p>` : ''}
       <button type="button" class="rc-btn rc-primary rc-big" data-act="alert"${can && !busy ? '' : ' disabled'}>${alerting ? 'Alerting nonprofits' : 'Yes, alert nonprofits'}</button>
+      ${noPhone ? `<p class="rc-warn" role="status">${esc(NO_PHONE)} <button type="button" class="rc-link" data-act="tab" data-v="places">Add a phone</button></p>` : ''}
       ${fromReport ? '' : '<button type="button" class="rc-btn rc-big rc-soft" data-act="editAmounts">Edit amounts</button>'}</div>`);
   }
   const LOT_TONE = { calling_places: 'purple', place_accepted: 'purple', calling_volunteer: 'purple', on_the_way: 'purple', delivered: 'green', unclaimed: 'orange' };
@@ -479,7 +492,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     // The conversation: what you said, HQ's replies and the live feed, oldest first.
     const timeline = [];
     for (const t of ui.talk) timeline.push({ at: t.at, html: t.who === 'me' ? meRow(t.text, clock(t.at)) : t.ask ? meRow(t.ask === 'free' ? 'Who’s free?' : 'What’s left?', clock(t.at)) + hqRow(`<div class="rc-bub rc-rich">${answer(t.ask)}</div>`) : hqRow(bubble(esc(t.text))) });
-    if (report()) for (const f of state.feed || []) { const html = feedRow(f); if (html) timeline.push({ at: Date.parse(f.at) || 0, html }); }
+    if (report()) for (const f of [...(state.feed || [])].reverse()) { const html = feedRow(f); if (html) timeline.push({ at: Date.parse(f.at) || 0, html }); }
     timeline.sort((a, b) => a.at - b.at).forEach((x) => parts.push(x.html));
     if ((st === 'count' || st === 'none') && ui.count) parts.push(countCard(false));
     if (st === 'ready') parts.push(countCard(true));
@@ -615,6 +628,10 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
         <button type="button" class="rc-btn rc-soft" data-act="evList">Cancel</button></div></div>`;
   }
 
+  // Call: rings the coordinator's own phone and connects them to the volunteer (POST /api/volunteers/:id/connect).
+  const callMsgs = new Map();
+  const callBtn = (v) => `<button type="button" class="rc-btn rc-soft rc-sm" data-act="volCall" data-id="${esc(v.id)}"${dis()}>${icon.phone}<span>Call</span></button>`;
+  const callNote = (v) => { const m = callMsgs.get(v.id); if (!m) return ''; return `<p class="${m.ok ? 'rc-ok' : 'rc-warn'}" role="status">${esc(m.text)}${m.needPhone ? ' <button type="button" class="rc-link" data-act="account">Add your phone number</button>' : ''}</p>`; };
   // ---- nonprofits and volunteers tabs -------------------------------------
   const msgHtml = () => (pageMsg ? `<p class="${pageMsg.ok ? 'rc-ok' : 'rc-warn'}" role="status">${esc(pageMsg.text)}</p>` : '');
   const acceptsText = (p) => (p.accepts || []).map((a) => lower(ACCEPTS.find(([k]) => k === a)?.[1] || a)).join(', ') || 'nothing set';
@@ -669,9 +686,9 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       const confirming = confirmRm === `v:${v.id}`;
       const actions = confirming
         ? `<p class="rc-line">Remove ${esc(v.name)} from the team?</p><div class="rc-actions"><button type="button" class="rc-btn rc-danger" data-act="volRmYes" data-id="${esc(v.id)}"${dis()}>Yes, remove</button><button type="button" class="rc-btn rc-soft" data-act="rmNo">Keep</button></div>`
-        : `<div class="rc-actions"><button type="button" class="rc-btn rc-soft rc-sm" data-act="volEdit" data-id="${esc(v.id)}">Edit</button><button type="button" class="rc-btn rc-soft rc-sm" data-act="volRm" data-id="${esc(v.id)}">Remove</button></div>`;
+        : `<div class="rc-actions">${callBtn(v)}<button type="button" class="rc-btn rc-soft rc-sm" data-act="volEdit" data-id="${esc(v.id)}">Edit</button><button type="button" class="rc-btn rc-soft rc-sm" data-act="volRm" data-id="${esc(v.id)}">Remove</button></div>`;
       return `<div class="rc-cardm rc-entity"><div class="rc-entityhead">${avatar(v.name)}<b class="rc-grow">${esc(v.name)}</b>${dot(...volStatus(v))}</div>
-        <p class="rc-line">${esc(phoneText(v))}</p>${actions}</div>`;
+        <p class="rc-line">${esc(phoneText(v))}</p>${actions}${callNote(v)}</div>`;
     }).join('');
     const empty = !volunteers().length && !vform ? '<div class="rc-empty"><p>No volunteers yet. Add the first person HQ can call.</p></div>' : '';
     return head + (vform && !vform.id ? volForm() : msgHtml()) + empty + `<div class="rc-list">${rows}</div>`;
@@ -694,25 +711,29 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     else if (!report()) { title = event().name; lead = 'Waiting to hear what is left.'; }
     else if (st === 'ready') { title = `About ${foodLine(report().items)}`; lead = 'Nonprofits have not been alerted yet.'; }
     else if (r.need === 0 && r.onWay === 0) { title = r.left === 0 ? 'Nothing was left over' : 'Everything is delivered'; lead = `${fmt(r.rescued)} portions found a home.`; }
-    else if (urg === 'ended') { title = `${fmt(r.need)} portions did not get a home`; lead = 'The time ran out.'; }
+    else if (urg === 'ended' || urg === 'closed') { title = `${fmt(r.need)} portions did not get a home`; lead = endReason(); }
     else { title = `${fmt(r.need + r.onWay)} portions on the move`; lead = `Now ${lotActivity(lots())}. ${fmt(r.onWay)} on the way, ${fmt(r.rescued)} delivered.`; }
     const segc = (n, color) => `<i style="flex:${n};background:${color}"></i>`;
     const bar = report() ? `<div class="rc-segs" role="img" aria-label="${fmt(r.rescued)} rescued, ${fmt(r.onWay)} on the way, ${fmt(r.need)} unclaimed">${segc(r.rescued, 'var(--green)')}${segc(r.onWay, 'var(--purple)')}${segc(r.need, 'var(--orange)')}</div>` : `<div class="rc-segs" aria-hidden="true">${segc(1, 'var(--track)')}</div>`;
     const inc = incident();
-    const sub = urg === 'done' ? 'all rescued' : urg === 'ended' ? 'time ran out' : urg === 'idle' ? 'no rescue yet' : `left · safe till ${clock(inc?.deadline)}`;
+    const sub = urg === 'done' ? 'all rescued' : urg === 'ended' ? 'time ran out' : urg === 'closed' ? 'rescue ended' : urg === 'idle' ? 'no rescue yet' : `left · safe till ${clock(inc?.deadline)}`;
     const legendDot = (c) => `<i style="background:${c}"></i>`;
     const list = (items, fn) => (items.length ? `<ul class="rc-people">${items.map(fn).join('')}</ul>` : '<p class="rc-line">None yet.</p>');
     return `<div class="rc-card"><div class="rc-ringbox">${ring(150, 16)}<span class="rc-ring-mid"><b data-t="timer">${timerText()}</b><small>${esc(sub)}</small></span></div>
       <h3>${esc(title)}</h3><p class="rc-lead">${esc(lead)}</p>${bar}
       <div class="rc-legend"><span>${legendDot('var(--green)')}${fmt(r.rescued)} rescued</span><span>${legendDot('var(--purple)')}${fmt(r.onWay)} on the way</span><span>${legendDot('var(--orange)')}${fmt(r.need)} unclaimed</span></div></div>
       <p class="rc-label">Nonprofits</p>${list(places(), (p) => `<li><span class="rc-grow">${esc(p.name)}</span>${dot(...placeStatus(p))}</li>`)}
-      <p class="rc-label">Volunteers</p>${list(volunteers(), (v) => `<li>${avatar(v.name)}<span class="rc-grow">${esc(v.name)}</span>${dot(...volStatus(v))}</li>`)}`;
+      <p class="rc-label">Volunteers</p>${list(volunteers(), (v) => `<li>${avatar(v.name)}<span class="rc-grow">${esc(v.name)}</span>${dot(...volStatus(v))}${callBtn(v)}</li>${callNote(v) ? `<li>${callNote(v)}</li>` : ''}`)}`;
   }
   function simulateRows() {
     const b = (act, label, offerId) => `<button type="button" class="rc-btn rc-soft rc-sm" data-act="${act}" data-id="${esc(offerId)}"${dis()}>${label}</button>`;
     // Stage 1: a nonprofit answering its call.
     const placeRows = lots().filter((l) => l.stage === 'calling_places').flatMap((l) => (l.places || []).filter((p) => p.status === 'calling' && p.offerId).map((p) =>
       `<div class="rc-simrow"><p><b>${esc(p.name)}</b> · ${fmt(l.portions)} ${esc(lower(l.item))}</p><div class="rc-actions">${b('simAccept', 'Says yes', p.offerId)}${b('simDecline', 'Says no', p.offerId)}</div></div>`));
+    // Demo path (POST /api/demo/simulate): works even when nobody has a phone. Never places a call.
+    const demoNext = { proposed: ['place_yes', 'Nonprofit says yes'], calling_places: ['place_yes', 'Nonprofit says yes'], waiting_volunteer: ['volunteer_accept', 'A volunteer takes it'], calling_volunteer: ['volunteer_accept', 'Volunteer accepts'], on_the_way: ['delivered', 'Delivered'] };
+    const demoRows = (state?.lots || []).filter((l) => demoNext[l.status]).map((l) => `<div class="rc-simrow"><p><b>Demo</b> · ${fmt(l.portions)} ${esc(lower(l.item))} · ${esc(l.label || l.status)}</p><div class="rc-actions"><button type="button" class="rc-btn rc-soft rc-sm" data-act="simDemo" data-id="${esc(l.id)}" data-v="${demoNext[l.status][0]}"${dis()}>${demoNext[l.status][1]} (demo, no call)</button></div></div>`);
+    placeRows.push(...demoRows);
     const open = lots().filter((l) => l.offerId && ['calling_volunteer', 'on_the_way'].includes(l.stage));
     if (!open.length && !placeRows.length) return '<p class="rc-line">Nothing to simulate yet. Start a rescue and alert nonprofits first.</p>';
     return placeRows.join('') + open.map((l) => {
@@ -727,7 +748,11 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
   }
   function accountHtml() {
     const keys = [['Ctrl or Cmd + 1 to 4', 'Switch tabs'], ['Ctrl or Cmd + /', 'Show or hide the sidebar'], ['Ctrl or Cmd + \\', 'Show or hide rescue status'], ['M', 'Start or stop the mic'], ['P', 'Take a photo'], ['Esc', 'Close this panel'], ['?', 'Open shortcuts']];
-    return `<div class="rc-section"><h3>Demo tools</h3><p class="rc-demo-note">Demo only. These change sample data so you can try the app without real calls.</p>
+    const st0 = state?.settings || {};
+    const mine = `<div class="rc-section"><h3>Your phone number</h3><p class="rc-hint">${st0.coordinatorPhoneSet ? `Saved, ends in ${esc(st0.coordinatorPhoneLast4 || '')}. Type a new number to change it.` : 'HQ rings this number when you tap Call, then connects you to the volunteer.'}</p>
+      <label class="rc-fld"><span>Phone</span><input type="tel" inputmode="tel" data-f="myphone" placeholder="762 235 7374" autocomplete="off"></label>
+      <div class="rc-actions"><button type="button" class="rc-btn rc-primary rc-sm" data-act="saveMyPhone"${dis()}>Save</button></div></div>`;
+    return mine + `<div class="rc-section"><h3>Demo tools</h3><p class="rc-demo-note">Demo only. These change sample data so you can try the app without real calls.</p>
       ${msgHtml()}
       <div class="rc-demo-grid">
         <button type="button" class="rc-btn rc-soft" data-act="sample"${dis()}>Load a sample event</button>
@@ -760,6 +785,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     app.dataset.tab = tab;
     app.dataset.nav = navOpen ? 'full' : 'mini';
     app.dataset.status = showStatusCol() ? 'on' : 'off';
+    slot('showstatus').hidden = !(wide() && started() && !statusOpen && (tab === 'rescue' || live()));
     root.querySelectorAll('.rc-tabbtn').forEach((b) => { if (b.dataset.v === tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     root.querySelector('.rc-nav-toggle').setAttribute('aria-label', navOpen ? 'Collapse sidebar' : 'Expand sidebar');
     slot('livedot').hidden = !live();
@@ -795,7 +821,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     if (lastUrg !== null && lastUrg !== urg && state) { lastUrg = urg; render(); return; }
     lastUrg = urg;
     const text = timerText();
-    const fraction = urg === 'done' ? 1 : urg === 'ended' || urg === 'idle' ? 0 : secondsLeft() / windowSeconds();
+    const fraction = urg === 'done' ? 1 : urg === 'ended' || urg === 'closed' || urg === 'idle' ? 0 : secondsLeft() / windowSeconds();
     root.querySelectorAll('[data-t="timer"]').forEach((el) => { el.textContent = text; });
     root.querySelectorAll('[data-t="ring"]').forEach((el) => el.setAttribute('stroke-dashoffset', (RING_C * (1 - Math.min(1, fraction))).toFixed(2)));
     const recent = lastSuccess && Date.now() - lastSuccess < 10000;
@@ -966,14 +992,18 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     say('me', text);
     render(); scrollThread();
     carryTalk = true;
-    const r = await act('POST', '/api/quick', { text }, { quiet: true });
+    // Preview only: nothing is created until the user taps Yes, alert nonprofits.
+    const r = await act('POST', '/api/quick', { text, preview: true }, { quiet: true });
     carryTalk = false;
-    if (r.ok) {
-      const u = r.data?.quick?.understood || {};
-      const what = foodLine(Array.isArray(u.items) ? u.items : report()?.items || []);
-      const venue = u.venue || event()?.venue;
+    if (r.ok && r.data?.quick?.preview) {
+      const u = r.data.quick.understood || {};
+      const items = (Array.isArray(u.items) ? u.items : []).map((i) => ({ item: lower(i.item), left: num(i.left), unit: i.unit || 'portions' }));
+      for (const it of event()?.items || []) if (!items.some((x) => lower(x.item) === lower(it.item))) items.push({ item: it.item, left: 0, unit: 'portions' });
+      ui.count = { source: 'voice', items, venue: event() ? '' : u.venue || '', goodForMinutes: event() ? null : r.data.quick.goodForMinutes || null, eventName: u.eventName || '' };
+      ui.editing = false; photos = [];
+      say('hq', `Got it: about ${foodLine(items) || 'your leftovers'}${u.venue && !event() ? ` at ${u.venue}` : ''}. Tap Yes, alert nonprofits to start calling.`);
+    } else if (r.ok) {
       ui.count = null; ui.editing = false; photos = [];
-      say('hq', `Got it: about ${what || 'your leftovers'}${venue ? ` at ${venue}` : ''}. Calling nonprofits now.`);
     } else if (r.missing) {
       // Older server: understand it here and ask for a yes before anything is sent.
       const p = parseSpoken(text);
@@ -1123,7 +1153,10 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     render();
     return r.ok;
   }
+  // Read the form fields straight from the page, so a value typed just before Save is never lost.
+  const syncForm = (scope, target) => { if (target) root.querySelectorAll(`input[data-f="${scope}"]`).forEach((el) => { target[el.dataset.k] = el.value; }); };
   async function savePlace() {
+    syncForm('pf', pform);
     const f = pform;
     const name = String(f.name || '').trim();
     const distanceMiles = Number(f.distanceMiles);
@@ -1141,6 +1174,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     if (ok) { pform = null; render(); }
   }
   async function saveVolunteer() {
+    syncForm('vf', vform);
     const f = vform;
     const name = String(f.name || '').trim();
     if (!name) { note('Add a name.', false); return render(); }
@@ -1180,7 +1214,7 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
     else if (f === 'vf' && vform) vform[t.dataset.k] = t.value;
   };
   root.addEventListener('input', onField, { signal: lifecycle.signal });
-  root.addEventListener('focusout', () => { if (deferred) setTimeout(() => { if (!disposed && !typing(document.activeElement)) { deferred = false; render(); } }, 50); }, { signal: lifecycle.signal });
+  root.addEventListener('focusout', (ev) => { if (ev.relatedTarget?.closest?.('[data-act]')) return; if (deferred) setTimeout(() => { if (!disposed && !typing(document.activeElement)) { deferred = false; render(); } }, 50); }, { signal: lifecycle.signal });
 
   root.addEventListener('click', async (ev) => {
     const button = ev.target.closest('[data-act], [data-ask]');
@@ -1266,6 +1300,19 @@ export function mountRescueChat(root, { apiBase = '' } = {}) {
       case 'reset': { const r = await act('POST', '/api/demo/reset', {}, { quiet: true }); if (r.ok) { ui = freshUi(); photos = []; saveUi(); note('Reset the rescue. Your nonprofits and volunteers are kept.', true); } else note(r.message, false); render(); break; }
       case 'resetAll': confirmRm = 'all'; render(); break;
       case 'resetAllYes': { const r = await act('POST', '/api/demo/reset-all', {}, { quiet: true }); confirmRm = null; if (r.ok) { ui = freshUi(); photos = []; saveUi(); note('Everything is back to the sample data.', true); } else note(r.message, false); render(); break; }
+      case 'volCall': {
+        let r;
+        try { r = await call('POST', `/api/volunteers/${encodeURIComponent(id)}/connect`, {}); } catch (e) { r = { ok: false, data: { error: netMessage(e) } }; }
+        const text = r.ok ? r.data?.message || 'Calling you now. Answer to be connected.' : failMessage(r, 'Calling a volunteer is not on this server yet.');
+        callMsgs.set(id, { ok: r.ok, text, needPhone: !r.ok && /coordinator|your (phone|number)/i.test(text) });
+        render(); break;
+      }
+      case 'saveMyPhone': {
+        const el = root.querySelector('input[data-f="myphone"]');
+        const r = await act('POST', '/api/settings', { coordinatorPhone: String(el?.value || '').trim() }, { quiet: true, missing: 'Saving your number is not on this server yet.' });
+        note(r.ok ? 'Saved your phone number.' : r.message, r.ok); render(); break;
+      }
+      case 'simDemo': await act('POST', '/api/demo/simulate', { lotId: id, action: button.dataset.v }); break;
       case 'simAccept': await act('POST', `/api/offers/${encodeURIComponent(id)}/respond`, { action: 'accept' }); break;
       case 'simDecline': await act('POST', `/api/offers/${encodeURIComponent(id)}/respond`, { action: 'decline' }); break;
       case 'simPickup': await act('POST', `/api/offers/${encodeURIComponent(id)}/pickup`, {}); break;

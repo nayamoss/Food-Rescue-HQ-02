@@ -29,6 +29,9 @@ export const setPlaceTimeoutMs = (ms) => { placeTimeoutMs = ms; };
 const E164 = /^\+[1-9]\d{7,14}$/;
 // Old demo placeholders (+1 202 555 xxxx). Never dial or keep these.
 const PLACEHOLDER_PHONE = /^\+1202555\d{4}$/;
+export const NO_PHONE = "No nonprofit has a phone number yet. Add one in Nonprofits to start.";
+// Item names are lower case inside sentences ("100 tacos, 10 sandwiches").
+const lc = (s) => String(s ?? "").toLowerCase();
 
 const seedPlaces = () => [
   { id: "p1", name: "Partner shelter A", type: "shelter", distanceMiles: 2, capacity: 150, accepts: ["prepared", "packaged", "drinks"], phone: "" },
@@ -182,6 +185,8 @@ function lotView(lot) {
   const place = win ? placeById(win.placeId) : null;
   const vol = win?.volunteerId ? volunteerById(win.volunteerId) : null;
   let status = lot.status;
+  const reason = lot.status !== "unclaimed" ? "" : lot.reason
+    || (mine.length && mine.every((o) => o.status === "skipped") ? "no_phone" : mine.some((o) => o.status === "unclaimed") ? "no_answer" : "declined");
   if (lot.status === "placed" && win) {
     status = { place_accepted: "waiting_volunteer", offered: "calling_volunteer", accepted: "on_the_way",
       picked_up: "on_the_way", dropped_off: "delivered" }[win.status] || "waiting_volunteer";
@@ -190,7 +195,7 @@ function lotView(lot) {
   const label = {
     proposed: "Ready to call nonprofits",
     calling_places: "Calling nonprofits",
-    unclaimed: "Nobody took it",
+    unclaimed: { no_phone: "Nobody to call: no nonprofit has a phone", no_answer: "No nonprofit said yes in time", declined: "Nobody took it" }[reason] || "Nobody took it",
     waiting_volunteer: `${placeName} said yes. Waiting for a free volunteer`,
     calling_volunteer: `${placeName} said yes. Calling ${vol?.name ?? "a volunteer"}`,
     on_the_way: `${vol?.name ?? "A volunteer"} is on the way`,
@@ -198,7 +203,7 @@ function lotView(lot) {
   }[status] ?? status;
   // Index of the step the lot is on now (steps before it are done). "unclaimed" fails at step 0.
   const at = { proposed: -1, calling_places: 0, unclaimed: 0, waiting_volunteer: 2, calling_volunteer: 2, on_the_way: 3, delivered: 5 }[status] ?? -1;
-  const stepLabels = ["Calling nonprofits", place ? `${placeName} said yes` : "A place says yes",
+  const stepLabels = [status === "unclaimed" ? label : "Calling nonprofits", place ? `${placeName} said yes` : "A place says yes",
     vol ? `Calling ${vol.name}` : "Calling a volunteer", "On the way", "Delivered"];
   const steps = LOT_STEP_KEYS.map((key, i) => ({
     key, label: stepLabels[i],
@@ -208,7 +213,7 @@ function lotView(lot) {
   return {
     id: lot.id, item: lot.item, unit: lot.unit, portions: lot.portions, kind: lot.kind,
     status, stage: { proposed: "match", calling_places: "places", unclaimed: "done", delivered: "done" }[status] ?? "volunteer",
-    label, steps, placeDeadline: lot.placeDeadline ?? null,
+    label, reason, steps, placeDeadline: status === "calling_places" ? lot.placeDeadline ?? null : null,
     offerId: win?.id ?? null, placeId: place?.id ?? null, placeName, placeAddress: place?.address ?? "",
     volunteerId: vol?.id ?? null, volunteerName: vol?.name ?? "",
     places: mine.map((o) => ({ offerId: o.id, placeId: o.placeId, name: placeById(o.placeId)?.name ?? "",
@@ -411,12 +416,12 @@ export function submitReport(body) {
   const { lots, offers } = propose(items);
   const total = sum(items, (i) => i.left);
   const texts = [];
-  const leftText = items.filter((i) => i.left > 0).map((i) => `${i.left} ${i.item}`).join(", ");
+  const leftText = items.filter((i) => i.left > 0).map((i) => `${i.left} ${lc(i.item)}`).join(", ");
   texts.push(total > 0 ? `Confirmed what is left: ${leftText}.` : "Confirmed that nothing is left over.");
   for (const lot of lots) {
     const names = offers.filter((o) => o.lotId === lot.id).map((o) => placeById(o.placeId).name);
-    texts.push(names.length ? `${lot.portions} ${lot.item} could go to: ${names.join(", ")}.`
-      : `${lot.portions} ${lot.item} have no place that can take them yet.`);
+    texts.push(names.length ? `${lot.portions} ${lc(lot.item)} could go to: ${names.join(", ")}.`
+      : `${lot.portions} ${lc(lot.item)} have no place that can take them yet.`);
   }
   const minutes = state.event.goodForMinutes ?? DEFAULT_WINDOW_MINUTES;
   const incident = total > 0 ? {
@@ -475,12 +480,12 @@ function assignVolunteer(d, o, texts, calls, { quiet = false } = {}) {
   const stamp = new Date().toISOString();
   if (!v) {
     o.status = "place_accepted"; o.volunteerId = null; o.updatedAt = stamp;
-    if (!quiet) texts.push(`No volunteer with a phone is free to carry ${o.portions} ${o.item} to ${place?.name ?? "the place"} yet.`);
+    if (!quiet) texts.push(`No volunteer with a phone is free to carry ${o.portions} ${lc(o.item)} to ${place?.name ?? "the place"} yet.`);
     return false;
   }
   o.status = "offered"; o.volunteerId = v.id; o.updatedAt = stamp;
   v.status = "asked";
-  texts.push(`Asking ${v.name} to carry ${o.portions} ${o.item} to ${place?.name ?? "the place"}.`);
+  texts.push(`Asking ${v.name} to carry ${o.portions} ${lc(o.item)} to ${place?.name ?? "the place"}.`);
   calls.push(o.id);
   return true;
 }
@@ -508,6 +513,11 @@ export function startPlaceOutreach(body) {
   }
   const todo = d.lots.filter((l) => l.status === "proposed");
   if (!todo.length) throw conflict("Every lot has already been sent out.");
+  // Never start an alert with nobody to call: every lot needs at least one proposed place with a phone.
+  // Nothing is changed, so the event and the counted amounts stay in place.
+  if (todo.some((lot) => !d.offers.some((o) => o.lotId === lot.id && o.status === "proposed" && placeById(o.placeId)?.phone))) {
+    throw conflict(NO_PHONE);
+  }
   const stamp = new Date().toISOString();
   const deadline = new Date(Date.now() + placeTimeoutMs).toISOString();
   const texts = [];
@@ -518,13 +528,13 @@ export function startPlaceOutreach(body) {
     for (const o of mine) { o.status = callable.includes(o) ? "calling" : "skipped"; o.updatedAt = stamp; }
     lot.updatedAt = stamp;
     if (!callable.length) {
-      lot.status = "unclaimed";
-      texts.push(`No place with a phone number can take ${lot.portions} ${lot.item}, so it is unclaimed. Add a phone number to a place to call it.`);
+      lot.status = "unclaimed"; lot.reason = "no_phone";
+      texts.push(`No place with a phone number can take ${lot.portions} ${lc(lot.item)}, so it is unclaimed. Add a phone number to a place to call it.`);
       continue;
     }
     lot.status = "calling_places";
     lot.placeDeadline = deadline;
-    texts.push(`Calling nonprofits about ${lot.portions} ${lot.item}: ${callable.map((o) => placeById(o.placeId).name).join(", ")}.`);
+    texts.push(`Calling nonprofits about ${lot.portions} ${lc(lot.item)}: ${callable.map((o) => placeById(o.placeId).name).join(", ")}.`);
     calls.push(...callable.map((o) => o.id));
   }
   if (d.incident && d.incident.status === "open") d.incident = { ...d.incident, status: "in_progress" };
@@ -550,10 +560,10 @@ export function placeAnswer(offerId, action) {
   if (!lot || lot.status !== "calling_places") return "closed";
   if (action === "decline") {
     o.status = "declined"; o.updatedAt = stamp;
-    texts.push(`${place.name} can't take ${lot.portions} ${lot.item}.`);
+    texts.push(`${place.name} can't take ${lot.portions} ${lc(lot.item)}.`);
     if (!d.offers.some((x) => x.lotId === lot.id && x.status === "calling")) {
-      lot.status = "unclaimed"; lot.updatedAt = stamp;
-      texts.push(`Every place said no to ${lot.portions} ${lot.item}. It is unclaimed.`);
+      lot.status = "unclaimed"; lot.reason = "declined"; lot.updatedAt = stamp;
+      texts.push(`Every place said no to ${lot.portions} ${lc(lot.item)}. It is unclaimed.`);
     }
     save(d, texts);
     return "declined";
@@ -563,7 +573,7 @@ export function placeAnswer(offerId, action) {
     if (x.lotId === lot.id && x.id !== o.id && x.status === "calling") { x.status = "taken"; x.updatedAt = stamp; }
   }
   lot.status = "placed"; lot.offerId = o.id; lot.updatedAt = stamp;
-  texts.push(`${place.name} said yes to ${o.portions} ${o.item}.`);
+  texts.push(`${place.name} said yes to ${o.portions} ${lc(o.item)}.`);
   assignVolunteer(d, o, texts, calls);
   save(d, texts, calls);
   return "won";
@@ -582,11 +592,11 @@ function volunteerAnswer(offerId, action) {
   if (action === "accept") {
     o.status = "accepted"; o.updatedAt = stamp;
     if (v) v.status = "accepted";
-    texts.push(`${who} accepted: ${o.portions} ${o.item} to ${place?.name ?? "the place"}. On the way.`);
+    texts.push(`${who} accepted: ${o.portions} ${lc(o.item)} to ${place?.name ?? "the place"}. On the way.`);
   } else {
     if (v) v.status = "declined";
     o.declinedBy = [...(o.declinedBy || []), o.volunteerId].filter(Boolean);
-    texts.push(`${who} can't take ${o.portions} ${o.item}.`);
+    texts.push(`${who} can't take ${o.portions} ${lc(o.item)}.`);
     if (o.lotId) {
       assignVolunteer(d, o, texts, calls);
     } else {
@@ -625,7 +635,7 @@ export function pickupOffer(offerId) {
   x.status = "picked_up"; x.updatedAt = new Date().toISOString();
   const v = d.volunteers.find((y) => y.id === x.volunteerId);
   if (v) v.status = "on_the_way";
-  save(d, [`${v ? v.name : "A volunteer"} picked up ${x.portions} ${x.item} and is heading to ${placeById(x.placeId)?.name ?? "the place"}.`]);
+  save(d, [`${v ? v.name : "A volunteer"} picked up ${x.portions} ${lc(x.item)} and is heading to ${placeById(x.placeId)?.name ?? "the place"}.`]);
   return snapshot();
 }
 
@@ -644,7 +654,7 @@ export function deliverOffer(offerId, { volunteerId } = {}) {
   if (v) v.status = "dropped_off";
   const lot = d.lots.find((l) => l.id === x.lotId);
   if (lot) { lot.status = "delivered"; lot.updatedAt = stamp; }
-  const texts = [`${v ? v.name : "A volunteer"} delivered ${x.portions} ${x.item} to ${placeById(x.placeId)?.name ?? "the place"}.`];
+  const texts = [`${v ? v.name : "A volunteer"} delivered ${x.portions} ${lc(x.item)} to ${placeById(x.placeId)?.name ?? "the place"}.`];
   const calls = [];
   assignWaiting(d, texts, calls); // this volunteer is free again
   if (!x.lotId && isActive(d.incident) && d.offers.every((y) => ["declined", "dropped_off"].includes(y.status))) {
@@ -668,9 +678,9 @@ export function checkTimeouts(now = Date.now()) {
   const minutes = Math.max(1, Math.round(placeTimeoutMs / 60000));
   for (const l of due) {
     const lot = d.lots.find((x) => x.id === l.id);
-    lot.status = "unclaimed"; lot.updatedAt = stamp;
+    lot.status = "unclaimed"; lot.reason = "no_answer"; lot.updatedAt = stamp;
     for (const o of d.offers) if (o.lotId === lot.id && o.status === "calling") { o.status = "unclaimed"; o.updatedAt = stamp; }
-    texts.push(`No place said yes to ${lot.portions} ${lot.item} within ${minutes} minutes. It is unclaimed.`);
+    texts.push(`No place said yes to ${lot.portions} ${lc(lot.item)} within ${minutes} minutes. It is unclaimed.`);
   }
   save(d, texts);
   return true;
@@ -917,6 +927,55 @@ export function describeOffer(offerId) {
     minutes,
     deadlineText: clock ? `in about ${minutes} minutes, by ${clock}` : `within about ${minutes} minutes`,
   };
+}
+
+// ---- demo: simulate a reply ---------------------------------------------------
+// Demo only. Moves a lot forward as if a nonprofit or volunteer answered, even when nobody has a phone.
+// Never places a real call.
+export function demoSimulate(body) {
+  expire();
+  const action = body?.action;
+  if (!["place_yes", "volunteer_accept", "delivered"].includes(action)) throw bad("Action must be place_yes, volunteer_accept or delivered.");
+  const lot0 = lotById(body?.lotId);
+  if (!lot0) throw notFound("That lot does not exist.");
+  const d = draft();
+  const lot = d.lots.find((l) => l.id === lot0.id);
+  const stamp = new Date().toISOString();
+  const texts = [];
+  if (action === "place_yes") {
+    if (!["proposed", "calling_places"].includes(lot.status)) throw conflict("A nonprofit already has this food.");
+    const mine = d.offers.filter((o) => o.lotId === lot.id && ["proposed", "calling"].includes(o.status));
+    const win = mine[0];
+    if (!win) throw conflict("No nonprofit can take this food.");
+    for (const o of mine) if (o !== win) { o.status = "taken"; o.updatedAt = stamp; }
+    win.status = "place_accepted"; win.volunteerId = null; win.updatedAt = stamp;
+    lot.status = "placed"; lot.offerId = win.id; lot.placeDeadline = null; lot.updatedAt = stamp;
+    texts.push(`Demo: ${placeById(win.placeId)?.name ?? "A nonprofit"} said yes to ${win.portions} ${lc(win.item)}.`);
+    if (d.incident && d.incident.status === "open") d.incident = { ...d.incident, status: "in_progress" };
+  } else {
+    const o = d.offers.find((x) => x.id === lot.offerId);
+    if (!o) throw conflict("No nonprofit has said yes to this food yet.");
+    const place = placeById(o.placeId)?.name ?? "the place";
+    if (action === "volunteer_accept") {
+      if (!["place_accepted", "offered"].includes(o.status)) throw conflict("A volunteer already has this food.");
+      let v = d.volunteers.find((x) => x.id === o.volunteerId);
+      if (!v) {
+        const busy = new Set(d.offers.filter((x) => x.id !== o.id && x.volunteerId && BUSY.includes(x.status)).map((x) => x.volunteerId));
+        v = d.volunteers.find((x) => x.optedIn && !busy.has(x.id));
+      }
+      if (!v) throw conflict("Add a volunteer first.");
+      o.status = "accepted"; o.volunteerId = v.id; o.updatedAt = stamp; v.status = "accepted";
+      texts.push(`Demo: ${v.name} accepted: ${o.portions} ${lc(o.item)} to ${place}. On the way.`);
+    } else {
+      if (!["accepted", "picked_up"].includes(o.status)) throw conflict("No volunteer is carrying this food yet.");
+      const v = d.volunteers.find((x) => x.id === o.volunteerId);
+      o.status = "dropped_off"; o.updatedAt = stamp; if (v) v.status = "dropped_off";
+      lot.status = "delivered"; lot.updatedAt = stamp;
+      texts.push(`Demo: ${v ? v.name : "A volunteer"} delivered ${o.portions} ${lc(o.item)} to ${place}.`);
+    }
+  }
+  save(d, texts);
+  return snapshot();
 }
 
 export const getVolunteer = (id) => volunteerById(id) ?? null;

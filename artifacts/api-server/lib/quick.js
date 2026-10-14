@@ -56,7 +56,7 @@ export function parseQuick(text) {
     rest = rest.replace(UNITS, "");
     rest = rest.split(STOP)[0].replace(/[^a-z' -]/gi, " ").replace(/\s+/g, " ").trim();
     if (!rest || /^(minutes?|mins?|hours?|hrs?)$/i.test(rest)) continue;
-    out.items.push({ item: titleCase(rest), left: n, unit: unit ? unit[1].toLowerCase().replace(/s$/, "") + "s" : "portions" });
+    out.items.push({ item: rest.toLowerCase(), left: n, unit: unit ? unit[1].toLowerCase().replace(/s$/, "") + "s" : "portions" });
   }
   return out;
 }
@@ -95,7 +95,7 @@ Rules: use only facts in the report; item names short and plain (for example "Ta
     const j = firstJson(textOut);
     if (!j || !Array.isArray(j.items)) return null;
     const items = j.items
-      .map((i) => ({ item: String(i.item || "").trim().slice(0, 100), left: Math.max(0, Math.round(Number(i.left))), unit: String(i.unit || "portions").slice(0, 30) }))
+      .map((i) => ({ item: String(i.item || "").trim().toLowerCase().slice(0, 100), left: Math.max(0, Math.round(Number(i.left))), unit: String(i.unit || "portions").slice(0, 30) }))
       .filter((i) => i.item && Number.isFinite(i.left) && i.left > 0);
     if (!items.length) return null;
     const g = Number(j.goodForMinutes);
@@ -113,12 +113,17 @@ export function registerQuick(app, core, after) {
     const parsed = (await parseWithModel(text)) || parseQuick(text);
     if (!parsed.items.length) return res.status(400).json({ error: "I could not find any food and amounts. Try: 100 tacos and 10 sandwiches at the main hall." });
     const goodFor = parsed.goodForMinutes || 45;
+    // Preview: only say what was understood. Nothing is created; the user confirms with "Yes, alert nonprofits".
+    if (req.body?.preview === true) return res.json({ quick: { understood: parsed, goodForMinutes: goodFor, preview: true } });
     try {
       const existing = core.snapshot().event;
-      const venue = parsed.venue || existing?.venue || "Event venue";
-      const name = parsed.eventName || existing?.name || `Leftovers at ${venue}`;
-      core.createEvent({ name, venue, date: new Date().toISOString().slice(0, 10), goodForMinutes: goodFor,
-        items: parsed.items.map((i) => ({ item: i.item, ordered: i.left })), notes: `Reported by voice: ${text.slice(0, 300)}` });
+      // Keep the current event: a report only fills in what is left. Only create one when there is none.
+      if (!existing) {
+        const venue = parsed.venue || "Event venue";
+        const name = parsed.eventName || `Leftovers at ${venue}`;
+        core.createEvent({ name, venue, date: new Date().toISOString().slice(0, 10), goodForMinutes: goodFor,
+          items: parsed.items.map((i) => ({ item: i.item, ordered: i.left })), notes: `Reported by voice: ${text.slice(0, 300)}` });
+      }
       core.submitReport({ items: parsed.items.map((i) => ({ item: i.item, left: i.left, unit: i.unit, source: "manual" })) });
       // Stage 1: call the nonprofits. Volunteers are only called once a place says yes.
       const snap = core.startPlaceOutreach({});
