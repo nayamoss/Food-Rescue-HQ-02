@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import express from "express";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -131,6 +132,16 @@ app.get("/v/:id", (_req, res) => {
   res.type("html").send("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Food Rescue HQ</title><p style='font-family:sans-serif;padding:24px'>Volunteer page coming soon.</p>");
 });
 app.use("/api", (_req, res) => res.status(404).json({ error: "Endpoint not found." }));
+// Versioned asset URLs: every deploy gets new file names, so no phone or proxy can serve an old copy.
+const BUILD = Date.now().toString(36);
+const pub = (f) => path.join(root, "public", f);
+const versioned = (file, type, fix) => (_req, res, next) => {
+  try { res.set("Cache-Control", "no-store").type(type).send(fix(readFileSync(pub(file), "utf8"))); } catch (e) { next(e); }
+};
+const tag = (html) => html.replace('href="/styles.css"', `href="/styles.css?v=${BUILD}"`).replace('src="/main.js"', `src="/main.js?v=${BUILD}"`);
+app.get(["/", "/index.html"], versioned("index.html", "html", tag));
+app.get("/v.html", versioned("v.html", "html", tag));
+app.get("/main.js", versioned("main.js", "js", (js) => js.replace("'/rescue-chat.js'", `'/rescue-chat.js?v=${BUILD}'`)));
 // no-store so Cloudflare and phones never keep an old copy of the app after a deploy
 app.use(express.static(path.join(root, "public"), { etag: false, setHeaders: (res) => res.set("Cache-Control", "no-store") }));
 app.use((err, _req, res, _next) => {
