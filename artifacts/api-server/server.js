@@ -9,6 +9,7 @@ import { registerQuick } from "./lib/quick.js";
 import { registerEstimate } from "./lib/estimate.js";
 import { registerTranscribe } from "./lib/transcribe.js";
 import { registerAgent } from "./lib/agent.js";
+import { registerConnect } from "./lib/connect.js";
 
 const log = pino();
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -137,6 +138,14 @@ app.patch("/api/volunteers/:id", route(200, (req) => core.patchVolunteer(req.par
 app.delete("/api/volunteers/:id", route(200, (req) => core.deleteVolunteer(req.params.id)));
 app.post("/api/volunteers/:id/phone", route(200, (req) => core.setVolunteerPhone(req.params.id, req.body?.phone), placeCalls));
 app.post("/api/places", route(201, (req) => core.addPlace(req.body)));
+// Coordinator's own phone, then "call the volunteer from the app" (rings the coordinator, bridges to the volunteer).
+app.post("/api/settings", route(200, (req) => core.setSettings(req.body)));
+registerConnect(app, {
+  getVolunteer: (id) => core.getVolunteer(id),
+  volunteerPhone: (id) => core.volunteerPhone(id),
+  coordinatorPhone: () => core.coordinatorPhone(),
+  addFeed: (text) => core.postUpdate(text),
+});
 app.patch("/api/places/:id", route(200, (req) => core.patchPlace(req.params.id, req.body)));
 app.delete("/api/places/:id", route(200, (req) => core.deletePlace(req.params.id)));
 app.get("/v/:id", (_req, res) => {

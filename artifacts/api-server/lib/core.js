@@ -42,7 +42,7 @@ const seedVolunteers = () => [
 ];
 const initial = () => ({
   event: null, report: null, places: seedPlaces(), lots: [], offers: [], volunteers: seedVolunteers(),
-  incident: null, feed: [],
+  incident: null, feed: [], settings: { coordinatorPhone: "" },
 });
 
 // ---- load + normalise -------------------------------------------------------
@@ -70,6 +70,8 @@ function normalise(raw) {
     status: VOLUNTEER_STATUSES.includes(v.status) ? v.status : "ready",
   }));
   s.feed = raw.feed.map((f) => ({ ...f, kind: f.kind || "system" }));
+  const cp = raw.settings?.coordinatorPhone;
+  s.settings = { coordinatorPhone: typeof cp === "string" && E164.test(cp) && !PLACEHOLDER_PHONE.test(cp) ? cp : "" };
   return s;
 }
 
@@ -242,7 +244,9 @@ function fullSnapshot() {
 // Public snapshot: safe to send to the browser (GET /api/state, SSE, agent).
 export function snapshot() {
   const snap = fullSnapshot();
-  return { ...snap, places: snap.places.map(maskPhone), volunteers: snap.volunteers.map(maskPhone) };
+  const cp = state.settings?.coordinatorPhone || "";
+  return { ...snap, places: snap.places.map(maskPhone), volunteers: snap.volunteers.map(maskPhone),
+    settings: { coordinatorPhoneSet: Boolean(cp), coordinatorPhoneLast4: cp ? cp.slice(-4) : "" } };
 }
 
 // Server-side only: same shape as snapshot() but with real phone numbers, for voice and sms.
@@ -250,6 +254,7 @@ export function snapshot() {
 export const internalState = () => fullSnapshot();
 export const volunteerPhone = (id) => volunteerById(id)?.phone || "";
 export const placePhone = (id) => placeById(id)?.phone || "";
+export const coordinatorPhone = () => state.settings?.coordinatorPhone || "";
 
 // ---- commit -----------------------------------------------------------------
 function commit(next) {
@@ -309,7 +314,7 @@ export function postUpdate(text) {
 }
 // Clears the event, report, offers, incident and feed. Keeps the volunteers and places the user has.
 export function reset() {
-  commit({ ...initial(), places: state.places, volunteers: state.volunteers.map((v) => ({ ...v, status: "ready" })) });
+  commit({ ...initial(), places: state.places, volunteers: state.volunteers.map((v) => ({ ...v, status: "ready" })), settings: state.settings });
   return snapshot();
 }
 // Full reset: back to the seeded places and volunteers (no phones).
@@ -721,6 +726,16 @@ function parsePhone(phone, { allowEmpty = false } = {}) {
   if (!E164.test(p)) throw bad(PHONE_HELP);
   if (PLACEHOLDER_PHONE.test(p)) throw bad("That is a demo placeholder number. Add a real phone number.");
   return p;
+}
+// The coordinator's own phone (for "call the volunteer from the app"). Empty clears it.
+export function setSettings(body) {
+  const b = body && typeof body === "object" ? body : {};
+  if (b.coordinatorPhone === undefined) throw bad("Send a coordinatorPhone to update.");
+  const raw = typeof b.coordinatorPhone === "string" ? b.coordinatorPhone.trim() : b.coordinatorPhone;
+  const phone = parsePhone(raw, { allowEmpty: true });
+  commit({ ...state, settings: { ...(state.settings || {}), coordinatorPhone: phone },
+    feed: withFeed(phone ? "Saved your phone number for calls." : "Removed your phone number.") });
+  return snapshot();
 }
 // A volunteer was added, freed or given a phone: hand them a lot that is waiting for one.
 function offerWaitingLots() {
