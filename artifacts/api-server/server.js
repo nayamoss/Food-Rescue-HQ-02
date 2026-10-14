@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import pino from "pino";
+import { registerEstimate } from "./lib/estimate.js";
 
 const log = pino();
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -69,6 +70,7 @@ app.use((req, _res, next) => {
   next();
 });
 app.disable("x-powered-by");
+registerEstimate(app); // before the global json parser: has its own larger body limit
 app.use(express.json({ limit: "8kb" }));
 app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
 app.get("/api/healthz", (_req, res) => res.json({ status: "ok" }));
