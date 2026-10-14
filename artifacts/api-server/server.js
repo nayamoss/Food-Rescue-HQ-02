@@ -34,7 +34,8 @@ async function placeCalls() {
   const ids = core.takePendingCalls();
   if (!ids.length) return;
   const calls = typeof voice?.callForOffers === "function" ? voice.callForOffers(voiceCore, ids) : null;
-  const texts = typeof sms?.textForOffers === "function" ? sms.textForOffers(voiceCore, ids) : null;
+  // Voice is the channel. Texts only go out when SMS_ENABLED=true.
+  const texts = process.env.SMS_ENABLED === "true" && typeof sms?.textForOffers === "function" ? sms.textForOffers(voiceCore, ids) : null;
   const [c, t] = await Promise.allSettled([calls, texts]);
   if (c.status === "rejected") log.error({ err: c.reason?.name }, "Voice call failed");
   if (t.status === "rejected") log.error({ err: t.reason?.name }, "Text message failed");
