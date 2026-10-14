@@ -212,3 +212,11 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .v .rc-actions .rc-btn { flex: 1; min-height: 56px; font-size: 17px; }
 .v .rc-btn.rc-accept { background: var(--green); color: #fff; }
 .v .rc-btn.rc-decline { background: var(--grey); }
+
+/* Thin scrollbars that blend in: no white track, soft plum thumb */
+* { scrollbar-width: thin; scrollbar-color: rgba(42, 24, 56, 0.22) transparent; }
+::-webkit-scrollbar { width: 4px; height: 4px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: rgba(42, 24, 56, 0.22); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background-color: rgba(42, 24, 56, 0.45); }
+html, body { background-color: var(--page, #FBE8D6); }

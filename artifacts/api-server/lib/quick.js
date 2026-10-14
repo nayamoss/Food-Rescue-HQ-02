@@ -16,8 +16,22 @@ function titleCase(s) {
   return s.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function normalize(text) {
+  return ` ${String(text || "")
+    .toLowerCase()
+    .replace(/\b(um+|uh+|like|so|okay|ok|basically|just|maybe|about|around|roughly|approximately|like)\b/g, " ")
+    .replace(/\bit'?s\b/g, " ")
+    .replace(/\b(half an hour|half hour|half-hour)\b/g, "30 minutes")
+    .replace(/\b(an|one) hour\b/g, "60 minutes")
+    .replace(/\b(a|one) hundred\b/g, "100").replace(/\bhundred\b/g, "100")
+    .replace(/\b(\d+) hundred\b/g, (_, n) => String(Number(n) * 100))
+    .replace(/\b(a )?dozen\b/g, "12")
+    .replace(/\s+/g, " ")
+    .trim()} `;
+}
+
 export function parseQuick(text) {
-  const t = ` ${String(text || "").replace(/\s+/g, " ").trim()} `;
+  const t = normalize(text);
   const out = { items: [], venue: "", goodForMinutes: null, eventName: "" };
 
   const mins = t.match(/(\d+|an?|one|two|half an?)\s*(hours?|hrs?|minutes?|mins?)\b/i);
