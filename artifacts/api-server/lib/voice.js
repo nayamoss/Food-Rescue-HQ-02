@@ -143,6 +143,7 @@ export async function callForOffers(core, offerIds) {
   const auth = "Basic " + Buffer.from(`${sid}:${token}`).toString("base64");
   const results = [];
 
+  const dialed = new Set();
   for (const offerId of Array.isArray(offerIds) ? offerIds : []) {
     try {
       const d = describe(core, offerId);
@@ -156,6 +157,9 @@ export async function callForOffers(core, offerIds) {
       }
       const phone = target?.phone;
       if (!phone || /^\+1202555/.test(phone)) { results.push({ offerId, kind: target?.kind, skipped: true, reason: "no phone or not opted in" }); continue; }
+      // One call per phone per batch: two items for the same partner must not ring the same phone twice at once.
+      if (dialed.has(phone)) { results.push({ offerId, kind: target.kind, skipped: true, reason: "already calling this phone" }); continue; }
+      dialed.add(phone);
       const query = target.kind === "place" ? { offerId, placeId: target.id } : { volunteerId: target.id, offerId };
       const body = new URLSearchParams({
         To: phone,

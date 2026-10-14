@@ -34,7 +34,18 @@ const voiceCore = {
   pickupOffer: (id) => core.pickupOffer(id),
   dropoffOffer: (id) => core.dropoffOffer(id),
   // Two-stage outreach: a place answers (stage 1), a volunteer confirms delivery (also by calling back).
-  placeAnswer: (id, action) => { const r = core.placeAnswer(id, action); Promise.resolve().then(placeCalls).catch(() => {}); return r; },
+  placeAnswer: (id, action) => {
+    const first = core.internalState().offers.find((o) => o.id === id);
+    const r = core.placeAnswer(id, action);
+    // One phone call answers for every item this partner is being asked about (we only ring them once).
+    if (first) {
+      for (const o of core.internalState().offers.filter((x) => x.placeId === first.placeId && x.status === "calling" && x.id !== id)) {
+        try { core.placeAnswer(o.id, action); } catch { /* that item may already be taken */ }
+      }
+    }
+    Promise.resolve().then(placeCalls).catch(() => {});
+    return r;
+  },
   deliverOffer: (id, opts) => { const snap = core.deliverOffer(id, opts); Promise.resolve().then(placeCalls).catch(() => {}); return snap; },
   openJobForPhone: (phone) => core.openJobForPhone(phone),
   callTarget: (id) => core.callTarget(id),
