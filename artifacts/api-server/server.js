@@ -36,10 +36,12 @@ function snapshot() {
   const rescued = incident?.assignments.reduce((sum, a) => sum + a.pickedUp, 0) ?? 0;
   return { ...state, totals: { total, unclaimed: Math.max(0, total - assigned), claimed: Math.max(0, assigned - rescued), rescued } };
 }
-function entry(text) {
-  return { id: randomUUID(), at: new Date().toISOString(), text };
+const FEED_LIMIT = 200;
+function entry(text, kind = "system") {
+  return { id: randomUUID(), at: new Date().toISOString(), text, kind };
 }
 function commit(next) {
+  if (next.feed.length > FEED_LIMIT) next = { ...next, feed: next.feed.slice(0, FEED_LIMIT) };
   writeFileSync(`${stateFile}.tmp`, JSON.stringify(next, null, 2));
   renameSync(`${stateFile}.tmp`, stateFile);
   state = next;
@@ -51,7 +53,7 @@ function expire() {
     const rescued = snapshot().totals.rescued;
     const status = rescued >= state.incident.total ? "resolved" : "expired";
     commit({ ...state, incident: { ...state.incident, status }, feed: [
-      entry(status === "expired" ? "Safety window ended. Remaining food is no longer available for rescue." : "All food rescued. Incident resolved."),
+      entry(status === "expired" ? "Safety window ended. Remaining food is no longer available for rescue." : "All food rescued. Incident resolved.", status),
       ...state.feed,
     ] });
   }
@@ -96,16 +98,23 @@ app.post("/api/incidents", (req, res) => {
     return res.status(400).json({ error: "Provide food, location, a positive integer total, and minutes between 0 and 1440." });
   }
   const incident = { id: randomUUID(), food: food.trim(), total, location: location.trim(),
-    deadline: new Date(Date.now() + minutes * 60000).toISOString(), status: "open", assignments: [] };
-  commit({ ...state, incident, feed: [entry(`Incident opened: ${total} ${incident.food} at ${incident.location}. ${minutes}-minute safety window.`), ...state.feed] });
+    createdAt: new Date().toISOString(), windowSeconds: Math.round(minutes * 60), deadline: new Date(Date.now() + minutes * 60000).toISOString(), status: "open", assignments: [] };
+  commit({ ...state, incident, feed: [entry(`Incident opened: ${total} ${incident.food} at ${incident.location}. ${minutes}-minute safety window.`, "incident"), ...state.feed] });
   return res.status(201).json(snapshot());
 });
 app.post("/api/demo/fast-forward", (_req, res) => {
   expire();
   if (!active()) return res.status(409).json({ error: "Create an active incident first." });
   commit({ ...state, incident: { ...state.incident, deadline: new Date(Date.now() + 60000).toISOString() },
-    feed: [entry("Demo fast-forward: safety deadline set to 60 seconds from now."), ...state.feed] });
+    feed: [entry("Demo fast-forward: safety deadline set to 60 seconds from now.", "demo"), ...state.feed] });
   res.json(snapshot());
+});
+// Coordinator updates only appear in the shared thread; nothing is texted yet.
+app.post("/api/updates", (req, res) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  if (!text || text.length > 280) return res.status(400).json({ error: "Write an update between 1 and 280 characters." });
+  commit({ ...state, feed: [entry(text, "update"), ...state.feed] });
+  res.status(201).json(snapshot());
 });
 app.post("/api/demo/reset", (_req, res) => { commit(initial()); res.json(snapshot()); });
 app.use("/api", (_req, res) => res.status(404).json({ error: "Endpoint not found." }));

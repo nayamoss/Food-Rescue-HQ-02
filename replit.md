@@ -9,7 +9,7 @@ A single-page demo for coordinating the rescue of surplus conference food before
 
 - `npm start` or `node server.js` with `PORT` set.
 - The existing managed service serves both the dashboard at `/` and endpoints at `/api`.
-- Frontend: plain HTML, CSS, and vanilla JavaScript in `public/`.
+- Frontend: plain HTML, CSS, and vanilla JavaScript in `public/`. The Rescue chat UI lives in `public/rescue-chat.js` and `public/styles.css`; the graduated app at `/food-rescue-hq/` imports the same files.
 - Express implementation: `artifacts/api-server/server.js`, loaded by the root `server.js`.
 - No database, authentication, Twilio, or Deepgram integration.
 
@@ -26,12 +26,14 @@ Local JSON persistence supports workspace process restarts; it is not a promise 
 - Preserve the provided workspace infrastructure rather than destructively replacing it. The application itself uses only Express and plain browser files.
 - The brief contains truncated lines. Interpret restart persistence as local JSON persistence, and fast-forward as a deadline 60 seconds from now.
 - Placeholder volunteers are for display only. No simulated claims, pickups, or texts.
-- UI: light grey page, white cards, green accent `#2F6B50`, no borders or shadows, card radius at most 12px.
+- UI: Pocket HQ direction, flow 3 (Rescue chat). Phone first: a pinned timer bar, one rescue thread, quick-reply chips and a pull-up status sheet. From 1024px wide it becomes three columns (team, thread, status). Apricot `#FFE7D3`, plum `#2B1B3D`, chili `#F2541B`, violet `#6A4BEA`, mint `#108A5C`; Bricolage Grotesque and Figtree.
+- `POST /api/updates { text }` adds a coordinator update (1 to 280 characters) to the thread. Nothing is texted yet. The feed keeps the newest 200 entries.
 
 ## Manual demo
 
-1. Open `/`; expect Idle and “All clear. No surplus food reported.”
-2. Click Create sample incident; expect Urgent, approximately 45:00, and 400 unclaimed tacos.
-3. Click Fast-forward; expect 01:00, then Expired after one minute.
-4. Click Reset; expect Idle.
-5. Create an incident and restart the workflow; the incident and original deadline should remain.
+1. Open `/`; expect “All clear” in the pinned bar and an HQ message saying no surplus food is reported.
+2. Tap Start sample rescue; expect “Rescue open”, approximately 45:00, and 400 unclaimed.
+3. Type an update and send it; expect it in the thread. Tap “Who’s free?”; expect the team list.
+4. Tap Fast-forward; expect 01:00, then “Ended” after one minute.
+5. Tap Start a new rescue; expect “All clear”.
+6. Create an incident and restart the workflow; the incident and original deadline should remain.
