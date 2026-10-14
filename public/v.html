@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#FBE8D6">
+  <title>Food Rescue HQ: your pickup</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<main class="v" id="v"><p>Loading your pickup…</p></main>
+<script>
+const root = document.getElementById('v');
+const id = decodeURIComponent((location.pathname.match(/\/v\/([^/?#]+)/) || [])[1] || new URLSearchParams(location.search).get('id') || '');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clock = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
+let state = null, busy = false, msg = '';
+const WORD = { offered: 'Waiting for your answer', accepted: 'You said yes', picked_up: 'On the way', dropped_off: 'Dropped off', declined: 'Declined' };
+function render() {
+  if (!state) { root.innerHTML = `<p>${esc(msg || 'Loading your pickup…')}</p>`; return; }
+  const vol = (state.volunteers || []).find((v) => String(v.id) === id);
+  if (!vol) { root.innerHTML = '<h1>Food Rescue HQ</h1><div class="rc-cardm"><p>We could not find this volunteer link. Ask the organizer for a new one.</p></div>'; return; }
+  const mine = (state.offers || []).filter((o) => o.volunteerId === id && o.status !== 'proposed');
+  const rank = { offered: 0, accepted: 1, picked_up: 2, dropped_off: 3, declined: 4 };
+  const o = [...mine].sort((a, b) => rank[a.status] - rank[b.status])[0];
+  let body;
+  if (!o) body = '<div class="rc-cardm"><h3>Nothing to pick up right now</h3><p class="rc-line">Stay close. HQ will ask you when food is ready.</p></div>';
+  else {
+    const p = (state.places || []).find((x) => x.id === o.placeId);
+    const e = state.event || {};
+    const by = state.incident?.deadline ? clock(state.incident.deadline) : '';
+    const b = (cls, path, payload, label) => `<button type="button" class="rc-btn ${cls}" data-path="${esc(path)}" data-body="${esc(payload)}"${busy ? ' disabled' : ''}>${label}</button>`;
+    const base = `/api/offers/${encodeURIComponent(o.id)}`;
+    const actions = o.status === 'offered' ? b('rc-accept', `${base}/respond`, '{"action":"accept"}', 'Accept') + b('rc-decline', `${base}/respond`, '{"action":"decline"}', 'Decline')
+      : o.status === 'accepted' ? b('rc-primary', `${base}/pickup`, '{}', 'Mark picked up')
+      : o.status === 'picked_up' ? b('rc-primary', `${base}/dropoff`, '{}', 'Mark dropped off') : '';
+    const thanks = o.status === 'dropped_off' ? '<p>Thank you. That food has a home.</p>' : o.status === 'declined' ? '<p>No problem. HQ will ask someone else.</p>' : '';
+    body = `<div class="rc-cardm"><span class="rc-stt ${esc(o.status)}" style="margin-left:0;justify-self:start">${esc(WORD[o.status])}</span>
+      <h3>${esc(o.portions)} ${esc(o.item)}</h3>
+      <p class="rc-kv"><span>Pick up from</span><b>${esc(e.venue || '')}</b></p>
+      <p class="rc-kv"><span>Take to</span><b>${esc(p?.name || 'a partner')}</b></p>
+      ${by ? `<p class="rc-kv"><span>Get it there by</span><b>${esc(by)}</b></p>` : ''}
+      ${thanks}${actions ? `<div class="rc-actions">${actions}</div>` : ''}</div>`;
+  }
+  root.innerHTML = `<h1>Hi ${esc(vol.name.split(' ')[0])}</h1>${msg ? `<p class="rc-warn" role="alert">${esc(msg)}</p>` : ''}${body}`;
+}
+async function load() {
+  if (busy) return;
+  try {
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    if (!res.ok) throw new Error();
+    state = await res.json(); msg = '';
+  } catch { if (!state) msg = 'We could not reach HQ. Check your connection.'; }
+  render();
+}
+root.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('[data-path]');
+  if (!btn || busy) return;
+  busy = true; msg = ''; render();
+  try {
+    const res = await fetch(btn.dataset.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: btn.dataset.body });
+    if (!res.ok) { let d = {}; try { d = await res.json(); } catch {} msg = res.status === 404 ? 'HQ cannot do that yet.' : (d.error || 'That did not work. Please try again.'); }
+    else state = await res.json();
+  } catch { msg = 'We could not reach HQ. Please try again.'; }
+  busy = false; render();
+});
+load(); setInterval(load, 3000);
+</script>
+</body>
+</html>
