@@ -34,22 +34,39 @@ export function validateRequest(body) {
   return { images, ordered };
 }
 
+const COUNT_METHODS = ["counted", "rows_by_columns", "estimated"];
+
 export function buildInstruction(ordered) {
   const list = ordered.length
     ? ordered.map((row) => (row.ordered === null ? row.item : `${row.item} (ordered ${row.ordered})`)).join(", ")
     : "none given";
+  const expected = ordered.length
+    ? [
+        "Expected items: the organizer ordered the items listed below, so those are the item names to expect and reuse.",
+        "Leftover quantities are often much larger than a casual glance suggests (dozens, not a handful). Still report only what is visible.",
+      ]
+    : ["Expected items: none were given, so name each visible food plainly."];
   return [
-    "You are helping an event organizer count leftover food in the photos.",
+    "You are helping an event organizer count leftover food in the photos. Accuracy of the counts matters most.",
     "Return JSON only, no prose and no code fences, with exactly this shape:",
-    '{"items":[{"item":string,"count":number,"unit":string,"confidence":"low"|"medium"|"high","note":string}],"unreadable":boolean,"overall_note":string}',
+    '{"items":[{"item":string,"count":number,"recount":number,"count_method":"counted"|"rows_by_columns"|"estimated","unit":string,"confidence":"low"|"medium"|"high","note":string}],"unreadable":boolean,"overall_note":string}',
+    "How to count:",
+    "- Count carefully and completely, item by item. Scan the whole photo including edges and corners before answering.",
+    "- For items arranged in a grid or rows, count the rows and count the items in each row, then multiply (count_method rows_by_columns). State the rows and columns in note.",
+    "- For loose or piled items, count each one individually (count_method counted).",
+    "- When items are clearly stacked, layered, or partly hidden behind others, include a careful estimate of the hidden ones (count_method estimated) and say in note how many were estimated and why.",
+    "- Never default to a small or round number. If you see many items, the count must reflect that.",
+    "- After the first count, count again independently from a different starting point and put that number in recount.",
     "Rules:",
-    "- Count only what is visible. Do not guess hidden or off-screen food.",
-    "- Reuse the ordered item names when they clearly match what you see; otherwise use a plain descriptive name.",
-    "- The photos may overlap or show the same food from different angles. Do not double count.",
-    "- Use a simple unit such as trays, boxes, portions, pizzas, bottles.",
+    "- List ONLY food that is actually visible. Do not invent side items, toppings, or extras that you cannot see.",
+    "- Do not guess food that is entirely off-screen.",
+    "- Reuse the expected item names when they clearly match what you see; otherwise use a plain descriptive name.",
+    "- The photos may overlap or show the same food from different angles. Do not double count across photos.",
+    "- Use a simple unit such as tacos, trays, boxes, portions, pizzas, bottles.",
     "- Do not judge whether the food is safe to eat.",
     "- Do not describe any people.",
     "- If no food is visible, set unreadable to true and return an empty items array.",
+    ...expected,
     `Ordered items: ${list}.`,
   ].join("\n");
 }
@@ -84,20 +101,38 @@ function firstJsonObject(text) {
   return null;
 }
 
+function toCount(value) {
+  const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(n) ? Math.min(MAX_COUNT, Math.max(0, Math.round(n))) : null;
+}
+
+// Two independent counts: take the larger when they roughly agree (an undercount is the usual
+// failure), otherwise keep the first count and flag low confidence.
+export function reconcileCounts(count, recount, confidence, note) {
+  if (recount === null || recount === count) return { count, confidence, note };
+  const larger = Math.max(count, recount);
+  if (larger - Math.min(count, recount) < larger * 0.5) return { count: larger, confidence, note };
+  const flag = `Two counts disagreed (${count} and ${recount}); check this one.`;
+  return { count, confidence: "low", note: note ? `${note} ${flag}` : flag };
+}
+
 export function parseEstimate(text) {
   const raw = typeof text === "string" ? firstJsonObject(text) : null;
   if (!raw || typeof raw !== "object") return null;
   const items = [];
   for (const row of Array.isArray(raw.items) ? raw.items : []) {
     const name = cleanText(row?.item, 100);
-    const count = typeof row?.count === "number" ? row.count : typeof row?.count === "string" && row.count.trim() ? Number(row.count) : NaN;
-    if (!name || !Number.isFinite(count)) continue;
+    const count = toCount(row?.count);
+    if (!name || count === null) continue;
+    const confidence = ["low", "medium", "high"].includes(row.confidence) ? row.confidence : "low";
+    const merged = reconcileCounts(count, toCount(row.recount), confidence, cleanText(row.note, 300));
     items.push({
       item: name,
-      count: Math.min(MAX_COUNT, Math.max(0, Math.round(count))),
+      count: merged.count,
       unit: cleanText(row.unit, 40) || "portions",
-      confidence: ["low", "medium", "high"].includes(row.confidence) ? row.confidence : "low",
-      note: cleanText(row.note, 300),
+      confidence: merged.confidence,
+      note: merged.note.slice(0, 300),
+      count_method: COUNT_METHODS.includes(row.count_method) ? row.count_method : "estimated",
     });
   }
   const unreadable = raw.unreadable === true || (items.length === 0 && raw.unreadable !== false);
