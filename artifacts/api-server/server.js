@@ -54,6 +54,10 @@ if (voice?.registerVoice) voice.registerVoice(app, voiceCore); // Twilio voice w
 if (sms?.registerSms) sms.registerSms(app, voiceCore); // Twilio messaging webhook (own urlencoded parser)
 app.use(express.json({ limit: "64kb" }));
 app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
+// Friendly answers when someone opens the Twilio webhook addresses in a browser (Twilio itself uses POST).
+for (const hook of ["/sms/inbound", "/voice/offer", "/voice/answer"]) {
+  app.get(hook, (_req, res) => res.type("text/plain").send("This address is for Twilio. It is working. Texts and calls are sent here with POST."));
+}
 app.get("/api/healthz", (_req, res) => res.json({ status: "ok" }));
 app.get("/api/state", (_req, res) => { core.expire(); res.json(core.snapshot()); });
 app.get("/api/stream", (req, res) => {
