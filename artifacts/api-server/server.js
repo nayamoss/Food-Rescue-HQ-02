@@ -5,6 +5,7 @@ import path from "node:path";
 import pino from "pino";
 import * as core from "./lib/core.js";
 import { registerEstimate } from "./lib/estimate.js";
+import { registerAgent } from "./lib/agent.js";
 
 const log = pino();
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -66,6 +67,7 @@ const route = (status, fn, after) => async (req, res, next) => {
     if (after) await after();
   } catch (error) { next(error); }
 };
+registerAgent(app, core); // agent questions (step 2) and match explanations (step 4)
 app.post("/api/incidents", route(201, (req) => core.createIncident(req.body)));
 app.post("/api/demo/fast-forward", route(200, () => core.fastForward()));
 // Coordinator updates only appear in the shared thread; nothing is texted yet.
